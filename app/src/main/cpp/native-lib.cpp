@@ -19,7 +19,7 @@
 const char* POOL_HOST = "solo.ckpool.org";
 const int POOL_PORT = 3333;
 
-// 請將此處替換為已複製的比特幣地址
+// 請保留已設定好的比特幣地址
 const char* WALLET_ADDRESS = "bc1qvn2rhjw553l2ttplyqpt2kaepd32dh5q6kfac9";
 
 std::string bytesToHexString(const uint8_t* bytes, size_t len) {
@@ -71,42 +71,48 @@ void startMiningLoop() {
     }
     LOGI("成功連線至礦池伺服器！");
 
-    // 步驟 1：發送 Stratum 訂閱指令 (mining.subscribe)
     const char* subscribe_msg = "{\"id\": 1, \"method\": \"mining.subscribe\", \"params\": [\"ManekiMiner/1.0\"]}\n";
     send(sock, subscribe_msg, strlen(subscribe_msg), 0);
-    LOGI("已發送 mining.subscribe 指令");
-
-    char buffer[1024];
-    memset(buffer, 0, sizeof(buffer));
-    int bytes_received = recv(sock, buffer, sizeof(buffer) - 1, 0);
     
-    if (bytes_received > 0) {
-        LOGI("收到礦池訂閱回覆：\n%s", buffer);
-    }
-
-    // 步驟 2：發送 Stratum 授權指令 (mining.authorize)
     char authorize_msg[256];
     snprintf(authorize_msg, sizeof(authorize_msg), "{\"id\": 2, \"method\": \"mining.authorize\", \"params\": [\"%s\", \"x\"]}\n", WALLET_ADDRESS);
     send(sock, authorize_msg, strlen(authorize_msg), 0);
-    LOGI("已發送 mining.authorize 指令，綁定錢包地址：%s", WALLET_ADDRESS);
 
-    // 步驟 3：接收授權結果 (確認礦池是否接受該地址)
-    memset(buffer, 0, sizeof(buffer));
-    bytes_received = recv(sock, buffer, sizeof(buffer) - 1, 0);
-    
-    if (bytes_received > 0) {
-        LOGI("收到礦池授權回覆：\n%s", buffer);
+    LOGI("小菊完成授權，進入持續監聽任務模式...");
+
+    // 建立無窮迴圈，持續接收礦池派發的新區塊任務
+    char buffer[4096];
+    while (true) {
+        memset(buffer, 0, sizeof(buffer));
+        int bytes_received = recv(sock, buffer, sizeof(buffer) - 1, 0);
+
+        if (bytes_received > 0) {
+            // 透過字串比對過濾不同類型的礦池指令
+            if (strstr(buffer, "mining.notify") != nullptr) {
+                LOGI("收到新區塊挖礦任務 (mining.notify)：\n%s", buffer);
+            } else if (strstr(buffer, "mining.set_difficulty") != nullptr) {
+                LOGI("收到難度調整指令 (mining.set_difficulty)：\n%s", buffer);
+            } else {
+                LOGI("收到礦池訊息：\n%s", buffer);
+            }
+        } else if (bytes_received == 0) {
+            LOGE("礦池伺服器已關閉連線");
+            break;
+        } else {
+            LOGE("網路連線異常中斷");
+            break;
+        }
     }
 
     close(sock);
-    LOGI("小菊完成授權連線測試，暫時進入休息狀態");
+    LOGI("連線結束，退出小菊全速模式");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_manekiminer_app_MainActivity_stringFromJNI(
         JNIEnv* env,
         jobject /* this */) {
-    std::string status = "小月與小菊引擎就緒。Stratum 授權模組已掛載。";
+    std::string status = "小月與小菊引擎就緒。Stratum 任務監聽中。";
     return env->NewStringUTF(status.c_str());
 }
 
