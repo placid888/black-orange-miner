@@ -40,6 +40,7 @@ class MainActivity : Activity() {
     private lateinit var tvDate: TextView
     private lateinit var tvWeather: TextView
     private lateinit var tvBatteryTemp: TextView
+    private lateinit var tvScreenToggle: TextView
     private lateinit var tvMode: TextView
     private lateinit var catLottieView: LottieAnimationView
 
@@ -48,14 +49,15 @@ class MainActivity : Activity() {
     private lateinit var valHashrate: TextView
     private lateinit var valJobId: TextView
     private lateinit var valDifficulty: TextView
-    private lateinit var valRoundTime: TextView     // 新增：本輪耗時
-    private lateinit var valPrevRoundTime: TextView // 新增：上輪耗時
+    private lateinit var valRoundTime: TextView     
+    private lateinit var valPrevRoundTime: TextView 
     private lateinit var valShares: TextView
     private lateinit var valHash: TextView
     private lateinit var valNonce: TextView
 
     private val handler = Handler(Looper.getMainLooper())
     private var isMining = false
+    private var isScreenKeptOn = true
 
     private enum class MiningMode { FULL_SPEED, LOW_POWER, THERMAL_THROTTLE }
     private var currentMode: MiningMode? = null
@@ -75,6 +77,8 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         val rootLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -113,10 +117,33 @@ class MainActivity : Activity() {
             setPadding(0, 4, 0, 0)
         }
 
+        tvScreenToggle = TextView(this).apply {
+            text = "💡 螢幕常亮: 🟢開啟 (點擊切換)"
+            setTextColor(Color.parseColor("#4DB6AC"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            gravity = Gravity.CENTER
+            setPadding(0, 16, 0, 0)
+            isClickable = true
+            
+            setOnClickListener {
+                isScreenKeptOn = !isScreenKeptOn
+                if (isScreenKeptOn) {
+                    text = "💡 螢幕常亮: 🟢開啟 (點擊切換)"
+                    setTextColor(Color.parseColor("#4DB6AC"))
+                    window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                } else {
+                    text = "💡 螢幕常亮: 🔴關閉 (允許休眠)"
+                    setTextColor(Color.parseColor("#757575"))
+                    window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                }
+            }
+        }
+
         topLayout.addView(tvTime)
         topLayout.addView(tvDate)
         topLayout.addView(tvWeather)
         topLayout.addView(tvBatteryTemp)
+        topLayout.addView(tvScreenToggle)
 
         val animationContainer = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
@@ -161,14 +188,13 @@ class MainActivity : Activity() {
         }
         bottomCardLayout.addView(tvMode)
 
-        // 動態生成 10 欄專業儀表板清單 (重新排序增加易讀性)
         valStatus = createDashboardRow(bottomCardLayout, "節點狀態", "#00E676")
         valUptime = createDashboardRow(bottomCardLayout, "運行時間", "#E0E0E0")
         valHashrate = createDashboardRow(bottomCardLayout, "即時算力", "#00B0FF")
         valJobId = createDashboardRow(bottomCardLayout, "當前任務", "#FF9800")
         valDifficulty = createDashboardRow(bottomCardLayout, "區塊難度", "#00BCD4")
-        valRoundTime = createDashboardRow(bottomCardLayout, "本輪耗時", "#FF4081")     // 粉紅色高亮顯示計時器
-        valPrevRoundTime = createDashboardRow(bottomCardLayout, "上輪耗時", "#757575") // 灰色顯示歷史數據
+        valRoundTime = createDashboardRow(bottomCardLayout, "本輪耗時", "#FF4081")     
+        valPrevRoundTime = createDashboardRow(bottomCardLayout, "上輪耗時", "#757575") 
         valShares = createDashboardRow(bottomCardLayout, "有效提交", "#FFD600")
         valNonce = createDashboardRow(bottomCardLayout, "隨機雜湊", "#B388FF")
         valHash = createDashboardRow(bottomCardLayout, "當前運算", "#9E9E9E")
@@ -306,7 +332,6 @@ class MainActivity : Activity() {
             .show()
     }
 
-    // 升級：對接 C++ 的全新資料流，加入 roundTime 與 prevRoundTime
     fun updateMiningStatus(status: String, nonce: Int, hash: String, hashrate: Double, shares: Int, uptime: Long, jobId: String, difficulty: String, roundTime: Long, prevRoundTime: Long) {
         runOnUiThread {
             valStatus.text = status
@@ -325,7 +350,6 @@ class MainActivity : Activity() {
             if (jobId != "-") valJobId.text = jobId
             if (difficulty != "-") valDifficulty.text = "0x$difficulty"
 
-            // 時間格式化工具函數 (轉為 MM:SS)
             val formatTime = { timeSec: Long ->
                 if (timeSec == 0L) "-"
                 else String.format(Locale.US, "%02d:%02d", timeSec / 60, timeSec % 60)
