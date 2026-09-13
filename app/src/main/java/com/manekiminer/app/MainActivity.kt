@@ -2,6 +2,7 @@ package com.manekiminer.app
 
 import android.animation.ObjectAnimator
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -9,6 +10,7 @@ import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.media.MediaPlayer // 新增 MediaPlayer
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
@@ -41,7 +43,6 @@ class MainActivity : Activity() {
     private lateinit var tvMode: TextView
     private lateinit var catLottieView: LottieAnimationView
 
-    // 擴充：更多專業儀表板 UI 元件
     private lateinit var valStatus: TextView
     private lateinit var valUptime: TextView
     private lateinit var valHashrate: TextView
@@ -58,6 +59,10 @@ class MainActivity : Activity() {
     private var currentMode: MiningMode? = null
     private var isPluggedIn = false
     private var batteryTemp = 0.0f
+
+    // 新增：音效播放器與狀態控制
+    private var mediaPlayer: MediaPlayer? = null
+    private var isSoundEnabled = true
 
     external fun stringFromJNI(): String
     external fun startMiningNative()
@@ -145,7 +150,7 @@ class MainActivity : Activity() {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                setMargins(48, 16, 48, 32) 
+                setMargins(48, 16, 48, 24) 
             }
         }
 
@@ -158,7 +163,6 @@ class MainActivity : Activity() {
         }
         bottomCardLayout.addView(tvMode)
 
-        // 動態生成 8 欄專業儀表板清單
         valStatus = createDashboardRow(bottomCardLayout, "節點狀態", "#00E676")
         valUptime = createDashboardRow(bottomCardLayout, "運行時間", "#E0E0E0")
         valHashrate = createDashboardRow(bottomCardLayout, "即時算力", "#00B0FF")
@@ -167,6 +171,33 @@ class MainActivity : Activity() {
         valShares = createDashboardRow(bottomCardLayout, "有效提交", "#FFD600")
         valNonce = createDashboardRow(bottomCardLayout, "隨機雜湊", "#B388FF")
         valHash = createDashboardRow(bottomCardLayout, "當前運算", "#9E9E9E")
+
+        // 新增：音效切換按鈕
+        val btnSoundToggle = Button(this).apply {
+            text = "🔊 音效：開啟"
+            setTextColor(Color.WHITE)
+            typeface = Typeface.DEFAULT_BOLD
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#424242")) // 深灰色
+                cornerRadius = 24f
+            }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(48, 0, 48, 16)
+            }
+            setOnClickListener {
+                isSoundEnabled = !isSoundEnabled
+                if (isSoundEnabled) {
+                    text = "🔊 音效：開啟"
+                    mediaPlayer?.start()
+                } else {
+                    text = "🔇 音效：關閉"
+                    mediaPlayer?.pause()
+                }
+            }
+        }
 
         val btnExit = Button(this).apply {
             text = "停止挖礦並退出系統"
@@ -188,10 +219,26 @@ class MainActivity : Activity() {
         rootLayout.addView(topLayout)
         rootLayout.addView(animationContainer)
         rootLayout.addView(bottomCardLayout)
+        rootLayout.addView(btnSoundToggle) // 放入音效按鈕
         rootLayout.addView(btnExit)
 
         setContentView(rootLayout)
         valStatus.text = stringFromJNI()
+
+        // 初始化 MediaPlayer (動態尋找 res/raw/background_sound)
+        try {
+            val resourceId = resources.getIdentifier("background_sound", "raw", packageName)
+            if (resourceId != 0) {
+                mediaPlayer = MediaPlayer.create(this, resourceId)
+                mediaPlayer?.isLooping = true // 設定無限迴圈播放
+                mediaPlayer?.setVolume(0.4f, 0.4f) // 將音量預設調為 40%，當作白噪音不刺耳
+                if (isSoundEnabled) {
+                    mediaPlayer?.start()
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
 
         val serviceIntent = Intent(this, MiningService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -205,13 +252,29 @@ class MainActivity : Activity() {
         registerBatteryReceiver()
     }
 
+    // 新增：生命週期控制 - 畫面出現時恢復播放
+    override fun onResume() {
+        super.onResume()
+        if (isSoundEnabled && mediaPlayer?.isPlaying == false) {
+            mediaPlayer?.start()
+        }
+    }
+
+    // 新增：生命週期控制 - 畫面隱藏時暫停播放
+    override fun onPause() {
+        super.onPause()
+        if (mediaPlayer?.isPlaying == true) {
+            mediaPlayer?.pause()
+        }
+    }
+
     private fun createDashboardRow(parent: LinearLayout, label: String, valueColor: String): TextView {
         val row = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(0, 6, 0, 6) } // 縮小間距讓更多資訊塞得下
+            ).apply { setMargins(0, 6, 0, 6) } 
         }
         
         val tvLabel = TextView(this).apply {
@@ -237,12 +300,61 @@ class MainActivity : Activity() {
         return tvValue
     }
 
-    // 升級：對接 C++ 的全新資料流
+    private fun showJackpotDialog(winningNonce: Int, winningHash: String) {
+        val dialogView = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(64, 80, 64, 80)
+            
+            background = GradientDrawable().apply {
+                colors = intArrayOf(Color.parseColor("#FFD700"), Color.parseColor("#FFA000"))
+                cornerRadius = 48f
+            }
+
+            addView(TextView(context).apply {
+                text = "🎉 JACKPOT! 貓咪發威啦! 🎉\n成功找到有效區塊！"
+                textSize = TypedValue.COMPLEX_UNIT_SP, 24f
+                setTextColor(Color.parseColor("#B71C1C"))
+                typeface = Typeface.DEFAULT_BOLD
+                gravity = Gravity.CENTER
+                setPadding(0, 0, 0, 32)
+            })
+
+            addView(TextView(context).apply {
+                text = String.format("神聖 Nonce: 0x%08X", winningNonce)
+                textSize = TypedValue.COMPLEX_UNIT_SP, 16f
+                setTextColor(Color.BLACK)
+                typeface = Typeface.MONOSPACE
+                gravity = Gravity.CENTER
+            })
+
+            addView(TextView(context).apply {
+                text = "Winning Hash:\n$winningHash"
+                textSize = TypedValue.COMPLEX_UNIT_SP, 12f
+                setTextColor(Color.parseColor("#333333"))
+                typeface = Typeface.MONOSPACE
+                gravity = Gravity.CENTER
+                setPadding(0, 16, 0, 0)
+            })
+        }
+
+        AlertDialog.Builder(this)
+            .setView(dialogView)
+            .setCancelable(false) 
+            .setPositiveButton("太神啦！繼續挖") { dialog, _ -> 
+                dialog.dismiss() 
+            }
+            .show()
+    }
+
     fun updateMiningStatus(status: String, nonce: Int, hash: String, hashrate: Double, shares: Int, uptime: Long, jobId: String, difficulty: String) {
         runOnUiThread {
             valStatus.text = status
             
-            // 轉換 uptime 成為 HH:mm:ss
+            if (status.contains("🎯")) {
+                showJackpotDialog(nonce, hash)
+            }
+            
             if (uptime > 0) {
                 val hours = uptime / 3600
                 val minutes = (uptime % 3600) / 60
@@ -250,7 +362,6 @@ class MainActivity : Activity() {
                 valUptime.text = String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
             }
 
-            // 更新 Job 與 Difficulty
             if (jobId != "-") valJobId.text = jobId
             if (difficulty != "-") valDifficulty.text = "0x$difficulty"
 
@@ -271,6 +382,10 @@ class MainActivity : Activity() {
 
     private fun executeGracefulShutdown() {
         valStatus.text = "系統安全關閉中..."
+        
+        // 提早停止音效
+        mediaPlayer?.stop()
+        
         stopMiningNative()
         
         val stopIntent = Intent(this, MiningService::class.java).apply {
@@ -425,5 +540,8 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(systemReceiver)
+        // 確實釋放 MediaPlayer 資源避免 Memory Leak
+        mediaPlayer?.release()
+        mediaPlayer = null
     }
 }
