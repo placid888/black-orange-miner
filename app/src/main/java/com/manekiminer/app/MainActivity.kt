@@ -42,13 +42,15 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
+        
+        val layoutId = resources.getIdentifier("activity_main", "layout", packageName)
+        setContentView(layoutId)
 
-        tvTime = findViewById<TextView>(R.id.tvTime)
-        tvDate = findViewById<TextView>(R.id.tvDate)
-        tvWeather = findViewById<TextView>(R.id.tvWeather)
-        tvMode = findViewById<TextView>(R.id.tvMode)
-        tvMiningStatus = findViewById<TextView>(R.id.tvMiningStatus)
+        tvTime = findViewById(resources.getIdentifier("tvTime", "id", packageName))
+        tvDate = findViewById(resources.getIdentifier("tvDate", "id", packageName))
+        tvWeather = findViewById(resources.getIdentifier("tvWeather", "id", packageName))
+        tvMode = findViewById(resources.getIdentifier("tvMode", "id", packageName))
+        tvMiningStatus = findViewById(resources.getIdentifier("tvMiningStatus", "id", packageName))
 
         tvMiningStatus.text = stringFromJNI()
 
