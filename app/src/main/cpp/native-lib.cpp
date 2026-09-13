@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <regex>
 #include <vector>
+#include <atomic>
 #include "sha256.h"
 
 #define LOG_TAG "ManekiMiner-Core"
@@ -22,7 +23,7 @@
 const char* POOL_HOST = "solo.ckpool.org";
 const int POOL_PORT = 3333;
 
-const char* WALLET_ADDRESS = "請貼上比特幣地址";
+const char* WALLET_ADDRESS = "bc1qvn2rhjw553l2ttplyqpt2kaepd32dh5q6kfac9";
 
 std::string bytesToHexString(const uint8_t* bytes, size_t len) {
     std::stringstream ss;
@@ -92,194 +93,208 @@ bool checkHashMeetsTarget(const uint8_t* hash, const uint8_t* target) {
 }
 
 void startMiningLoop() {
-    LOGI("小菊全速模式啟動：嘗試連線至 Solo 礦池 %s:%d", POOL_HOST, POOL_PORT);
-
-    struct hostent *host = gethostbyname(POOL_HOST);
-    if (host == nullptr) {
-        LOGE("DNS 解析失敗，檢查網路連線狀態");
-        return;
-    }
-
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock < 0) {
-        LOGE("Socket 建立失敗");
-        return;
-    }
-
-    struct sockaddr_in server_addr;
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(POOL_PORT);
-    memcpy(&server_addr.sin_addr.s_addr, host->h_addr, host->h_length);
-
-    if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-        LOGE("連線至礦池伺服器失敗");
-        close(sock);
-        return;
-    }
-    LOGI("成功連線至礦池伺服器！");
-
-    const char* subscribe_msg = "{\"id\": 1, \"method\": \"mining.subscribe\", \"params\": [\"ManekiMiner/1.0\"]}\n";
-    send(sock, subscribe_msg, strlen(subscribe_msg), 0);
-    
-    char authorize_msg[256];
-    snprintf(authorize_msg, sizeof(authorize_msg), "{\"id\": 2, \"method\": \"mining.authorize\", \"params\": [\"%s\", \"x\"]}\n", WALLET_ADDRESS);
-    send(sock, authorize_msg, strlen(authorize_msg), 0);
-
-    LOGI("小菊完成授權，進入挖礦與任務監聽迴圈...");
-
-    std::string current_extranonce1 = "";
-    int current_extranonce2_size = 0;
-    
-    std::string current_job_id = "";
-    std::string current_prevhash = "";
-    std::string current_coinb1 = "";
-    std::string current_coinb2 = "";
-    std::string current_version = "";
-    std::string current_nbit = "";
-    std::string current_ntime = "";
-    std::vector<std::string> current_merkle_branch;
-    
-    uint8_t target_difficulty[32];
-    memset(target_difficulty, 0, 32);
-
-    std::thread listener_thread([sock, &current_extranonce1, &current_extranonce2_size, &current_job_id, &current_prevhash, &current_coinb1, &current_coinb2, &current_version, &current_nbit, &current_ntime, &current_merkle_branch, &target_difficulty]() {
-        char rx_buffer[4096];
-        while (true) {
-            memset(rx_buffer, 0, sizeof(rx_buffer));
-            int bytes_received = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);
-            if (bytes_received <= 0) break;
-
-            std::string payload(rx_buffer);
-            
-            if (payload.find("\"id\": 1") != std::string::npos || payload.find("\"id\":1") != std::string::npos) {
-                std::regex sub_regex(R"REGEX("result":\s*\[.*,\s*"([a-fA-F0-9]+)",\s*(\d+)\s*\])REGEX");
-                std::smatch match;
-                if (std::regex_search(payload, match, sub_regex) && match.size() >= 3) {
-                    current_extranonce1 = match.str(1);
-                    current_extranonce2_size = std::stoi(match.str(2));
-                    LOGI("【訂閱解析成功】 Extranonce1: %s, Size: %d", current_extranonce1.c_str(), current_extranonce2_size);
-                }
-            }
-
-            if (payload.find("mining.notify") != std::string::npos) {
-                std::regex notify_regex(R"REGEX("params":\s*\[\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*\[(.*?)\]\s*,\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)")REGEX");
-                std::smatch match;
-                if (std::regex_search(payload, match, notify_regex) && match.size() >= 9) {
-                    current_job_id = match.str(1);
-                    current_prevhash = match.str(2);
-                    current_coinb1 = match.str(3);
-                    current_coinb2 = match.str(4);
-                    std::string merkle_array_str = match.str(5);
-                    current_version = match.str(6);
-                    current_nbit = match.str(7);
-                    current_ntime = match.str(8);
-                    
-                    current_merkle_branch = extractArrayElements(merkle_array_str);
-                    getTargetFromNbits(current_nbit, target_difficulty);
-                    
-                    LOGI("【取得新任務】 Job ID: %s, 目標難度已更新", current_job_id.c_str());
-                }
-            }
-        }
-    });
-    listener_thread.detach();
-
-    uint32_t nonce = 0;
-    uint32_t extranonce2_val = 0;
-    uint8_t hash_output[32];
-
+    // 外層加入無限迴圈，提供斷線自動重連機制
     while (true) {
-        if (current_prevhash.empty() || current_extranonce1.empty() || current_version.empty()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        LOGI("小菊全速模式啟動：嘗試連線至 Solo 礦池 %s:%d", POOL_HOST, POOL_PORT);
+
+        struct hostent *host = gethostbyname(POOL_HOST);
+        if (host == nullptr) {
+            LOGE("DNS 解析失敗，等待 5 秒後重試...");
+            std::this_thread::sleep_for(std::chrono::seconds(5));
             continue;
         }
 
-        std::stringstream en2_ss;
-        en2_ss << std::hex << std::setw(current_extranonce2_size * 2) << std::setfill('0') << extranonce2_val;
-        std::string extranonce2 = en2_ss.str();
+        int sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock < 0) {
+            LOGE("Socket 建立失敗，等待 5 秒後重試...");
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+            continue;
+        }
 
-        std::string coinbase_hex = current_coinb1 + current_extranonce1 + extranonce2 + current_coinb2;
+        struct sockaddr_in server_addr;
+        memset(&server_addr, 0, sizeof(server_addr));
+        server_addr.sin_family = AF_INET;
+        server_addr.sin_port = htons(POOL_PORT);
+        memcpy(&server_addr.sin_addr.s_addr, host->h_addr, host->h_length);
+
+        if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+            LOGE("連線至礦池伺服器失敗，等待 5 秒後重試...");
+            close(sock);
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+            continue;
+        }
+        LOGI("成功連線至礦池伺服器！");
+
+        const char* subscribe_msg = "{\"id\": 1, \"method\": \"mining.subscribe\", \"params\": [\"ManekiMiner/1.0\"]}\n";
+        send(sock, subscribe_msg, strlen(subscribe_msg), 0);
         
-        size_t coinbase_len = coinbase_hex.length() / 2;
-        uint8_t coinbase_bytes[1024]; 
-        hexStringToBytes(coinbase_hex, coinbase_bytes);
+        char authorize_msg[256];
+        snprintf(authorize_msg, sizeof(authorize_msg), "{\"id\": 2, \"method\": \"mining.authorize\", \"params\": [\"%s\", \"x\"]}\n", WALLET_ADDRESS);
+        send(sock, authorize_msg, strlen(authorize_msg), 0);
 
-        uint8_t merkle_root[32];
-        double_sha256(coinbase_bytes, coinbase_len, merkle_root);
+        LOGI("小菊完成授權，進入挖礦與任務監聽迴圈...");
 
-        for (const std::string& branch_hex : current_merkle_branch) {
-            uint8_t branch_bytes[32];
-            hexStringToBytes(branch_hex, branch_bytes);
+        // 設立連線狀態原子變數，確保監聽執行緒與挖礦執行緒同步中斷
+        std::atomic<bool> is_connected(true);
+        std::string current_extranonce1 = "";
+        int current_extranonce2_size = 0;
+        
+        std::string current_job_id = "";
+        std::string current_prevhash = "";
+        std::string current_coinb1 = "";
+        std::string current_coinb2 = "";
+        std::string current_version = "";
+        std::string current_nbit = "";
+        std::string current_ntime = "";
+        std::vector<std::string> current_merkle_branch;
+        
+        uint8_t target_difficulty[32];
+        memset(target_difficulty, 0, 32);
+
+        std::thread listener_thread([sock, &is_connected, &current_extranonce1, &current_extranonce2_size, &current_job_id, &current_prevhash, &current_coinb1, &current_coinb2, &current_version, &current_nbit, &current_ntime, &current_merkle_branch, &target_difficulty]() {
+            char rx_buffer[4096];
+            while (is_connected) {
+                memset(rx_buffer, 0, sizeof(rx_buffer));
+                int bytes_received = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);
+                if (bytes_received <= 0) {
+                    LOGE("與礦池伺服器斷線，準備重新啟動引擎");
+                    is_connected = false;
+                    break;
+                }
+
+                std::string payload(rx_buffer);
+                
+                if (payload.find("\"id\": 1") != std::string::npos || payload.find("\"id\":1") != std::string::npos) {
+                    std::regex sub_regex(R"REGEX("result":\s*\[.*,\s*"([a-fA-F0-9]+)",\s*(\d+)\s*\])REGEX");
+                    std::smatch match;
+                    if (std::regex_search(payload, match, sub_regex) && match.size() >= 3) {
+                        current_extranonce1 = match.str(1);
+                        current_extranonce2_size = std::stoi(match.str(2));
+                        LOGI("【訂閱解析成功】 Extranonce1: %s, Size: %d", current_extranonce1.c_str(), current_extranonce2_size);
+                    }
+                }
+
+                if (payload.find("mining.notify") != std::string::npos) {
+                    std::regex notify_regex(R"REGEX("params":\s*\[\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*\[(.*?)\]\s*,\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)")REGEX");
+                    std::smatch match;
+                    if (std::regex_search(payload, match, notify_regex) && match.size() >= 9) {
+                        current_job_id = match.str(1);
+                        current_prevhash = match.str(2);
+                        current_coinb1 = match.str(3);
+                        current_coinb2 = match.str(4);
+                        std::string merkle_array_str = match.str(5);
+                        current_version = match.str(6);
+                        current_nbit = match.str(7);
+                        current_ntime = match.str(8);
+                        
+                        current_merkle_branch = extractArrayElements(merkle_array_str);
+                        getTargetFromNbits(current_nbit, target_difficulty);
+                    }
+                }
+            }
+        });
+        listener_thread.detach();
+
+        uint32_t nonce = 0;
+        uint32_t extranonce2_val = 0;
+        uint8_t hash_output[32];
+
+        // 挖礦迴圈將在斷線時一併退出
+        while (is_connected) {
+            if (current_prevhash.empty() || current_extranonce1.empty() || current_version.empty()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                continue;
+            }
+
+            std::stringstream en2_ss;
+            en2_ss << std::hex << std::setw(current_extranonce2_size * 2) << std::setfill('0') << extranonce2_val;
+            std::string extranonce2 = en2_ss.str();
+
+            std::string coinbase_hex = current_coinb1 + current_extranonce1 + extranonce2 + current_coinb2;
             
-            uint8_t concat[64];
-            memcpy(concat, merkle_root, 32);
-            memcpy(concat + 32, branch_bytes, 32);
-            
-            double_sha256(concat, 64, merkle_root);
+            size_t coinbase_len = coinbase_hex.length() / 2;
+            uint8_t coinbase_bytes[1024]; 
+            hexStringToBytes(coinbase_hex, coinbase_bytes);
+
+            uint8_t merkle_root[32];
+            double_sha256(coinbase_bytes, coinbase_len, merkle_root);
+
+            for (const std::string& branch_hex : current_merkle_branch) {
+                uint8_t branch_bytes[32];
+                hexStringToBytes(branch_hex, branch_bytes);
+                
+                uint8_t concat[64];
+                memcpy(concat, merkle_root, 32);
+                memcpy(concat + 32, branch_bytes, 32);
+                
+                double_sha256(concat, 64, merkle_root);
+            }
+
+            uint8_t block_header[80];
+            memset(block_header, 0, sizeof(block_header));
+
+            hexStringToBytes(current_version, block_header);
+            reverseBytes(block_header, 4);
+
+            hexStringToBytes(current_prevhash, block_header + 4);
+
+            memcpy(block_header + 36, merkle_root, 32);
+
+            hexStringToBytes(current_ntime, block_header + 68);
+            reverseBytes(block_header + 68, 4);
+
+            hexStringToBytes(current_nbit, block_header + 72);
+            reverseBytes(block_header + 72, 4);
+
+            block_header[76] = (nonce >> 0) & 0xFF;
+            block_header[77] = (nonce >> 8) & 0xFF;
+            block_header[78] = (nonce >> 16) & 0xFF;
+            block_header[79] = (nonce >> 24) & 0xFF;
+
+            double_sha256(block_header, 80, hash_output);
+
+            if (checkHashMeetsTarget(hash_output, target_difficulty)) {
+                std::string success_hash = bytesToHexString(hash_output, 32);
+                LOGI("★★★★★【碰撞成功】★★★★★ 找到符合難度的區塊！");
+                LOGI("Hash: %s", success_hash.c_str());
+                LOGI("Nonce: %u, Extranonce2: %s", nonce, extranonce2.c_str());
+                
+                char nonce_hex[9];
+                snprintf(nonce_hex, sizeof(nonce_hex), "%08x", nonce);
+
+                char submit_msg[512];
+                snprintf(submit_msg, sizeof(submit_msg), 
+                         "{\"id\": 4, \"method\": \"mining.submit\", \"params\": [\"%s\", \"%s\", \"%s\", \"%s\", \"%s\"]}\n", 
+                         WALLET_ADDRESS, current_job_id.c_str(), extranonce2.c_str(), current_ntime.c_str(), nonce_hex);
+                
+                send(sock, submit_msg, strlen(submit_msg), 0);
+                LOGI("已發送 mining.submit 指令：\n%s", submit_msg);
+            }
+
+            nonce++;
+            if (nonce == 0xFFFFFFFF) {
+                extranonce2_val++;
+                nonce = 0;
+            }
+
+            if (nonce % 100000 == 0) {
+                std::string block_hash_hex = bytesToHexString(hash_output, 32);
+                LOGI("小菊運算中... Nonce: %u, 區塊雜湊: %s", nonce, block_hash_hex.c_str());
+            }
         }
 
-        uint8_t block_header[80];
-        memset(block_header, 0, sizeof(block_header));
-
-        hexStringToBytes(current_version, block_header);
-        reverseBytes(block_header, 4);
-
-        hexStringToBytes(current_prevhash, block_header + 4);
-
-        memcpy(block_header + 36, merkle_root, 32);
-
-        hexStringToBytes(current_ntime, block_header + 68);
-        reverseBytes(block_header + 68, 4);
-
-        hexStringToBytes(current_nbit, block_header + 72);
-        reverseBytes(block_header + 72, 4);
-
-        block_header[76] = (nonce >> 0) & 0xFF;
-        block_header[77] = (nonce >> 8) & 0xFF;
-        block_header[78] = (nonce >> 16) & 0xFF;
-        block_header[79] = (nonce >> 24) & 0xFF;
-
-        double_sha256(block_header, 80, hash_output);
-
-        if (checkHashMeetsTarget(hash_output, target_difficulty)) {
-            std::string success_hash = bytesToHexString(hash_output, 32);
-            LOGI("★★★★★【碰撞成功】★★★★★ 找到符合難度的區塊！");
-            LOGI("Hash: %s", success_hash.c_str());
-            LOGI("Nonce: %u, Extranonce2: %s", nonce, extranonce2.c_str());
-            
-            char nonce_hex[9];
-            snprintf(nonce_hex, sizeof(nonce_hex), "%08x", nonce);
-
-            char submit_msg[512];
-            snprintf(submit_msg, sizeof(submit_msg), 
-                     "{\"id\": 4, \"method\": \"mining.submit\", \"params\": [\"%s\", \"%s\", \"%s\", \"%s\", \"%s\"]}\n", 
-                     WALLET_ADDRESS, current_job_id.c_str(), extranonce2.c_str(), current_ntime.c_str(), nonce_hex);
-            
-            send(sock, submit_msg, strlen(submit_msg), 0);
-            LOGI("已發送 mining.submit 指令：\n%s", submit_msg);
-        }
-
-        nonce++;
-        if (nonce == 0xFFFFFFFF) {
-            extranonce2_val++;
-            nonce = 0;
-        }
-
-        if (nonce % 100000 == 0) {
-            std::string block_hash_hex = bytesToHexString(hash_output, 32);
-            LOGI("小菊運算中... Nonce: %u, 區塊雜湊: %s", nonce, block_hash_hex.c_str());
-        }
+        // 關閉 Socket 資源，等待 5 秒後重啟連線
+        close(sock);
+        LOGI("清理連線資源，準備重新連線...");
+        std::this_thread::sleep_for(std::chrono::seconds(5));
     }
-
-    close(sock);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_manekiminer_app_MainActivity_stringFromJNI(
         JNIEnv* env,
         jobject /* this */) {
-    std::string status = "引擎就緒。任務提交模組已掛載。";
+    std::string status = "引擎就緒。斷線重連機制已掛載。";
     return env->NewStringUTF(status.c_str());
 }
 
