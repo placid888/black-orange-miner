@@ -10,7 +10,7 @@ import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
-import android.media.MediaPlayer // 新增 MediaPlayer
+import android.media.MediaPlayer
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Bundle
@@ -59,10 +59,6 @@ class MainActivity : Activity() {
     private var currentMode: MiningMode? = null
     private var isPluggedIn = false
     private var batteryTemp = 0.0f
-
-    // 新增：音效播放器與狀態控制
-    private var mediaPlayer: MediaPlayer? = null
-    private var isSoundEnabled = true
 
     external fun stringFromJNI(): String
     external fun startMiningNative()
@@ -150,7 +146,7 @@ class MainActivity : Activity() {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                setMargins(48, 16, 48, 24) 
+                setMargins(48, 16, 48, 32) 
             }
         }
 
@@ -172,33 +168,6 @@ class MainActivity : Activity() {
         valNonce = createDashboardRow(bottomCardLayout, "隨機雜湊", "#B388FF")
         valHash = createDashboardRow(bottomCardLayout, "當前運算", "#9E9E9E")
 
-        // 新增：音效切換按鈕
-        val btnSoundToggle = Button(this).apply {
-            text = "🔊 音效：開啟"
-            setTextColor(Color.WHITE)
-            typeface = Typeface.DEFAULT_BOLD
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#424242")) // 深灰色
-                cornerRadius = 24f
-            }
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                setMargins(48, 0, 48, 16)
-            }
-            setOnClickListener {
-                isSoundEnabled = !isSoundEnabled
-                if (isSoundEnabled) {
-                    text = "🔊 音效：開啟"
-                    mediaPlayer?.start()
-                } else {
-                    text = "🔇 音效：關閉"
-                    mediaPlayer?.pause()
-                }
-            }
-        }
-
         val btnExit = Button(this).apply {
             text = "停止挖礦並退出系統"
             setTextColor(Color.WHITE)
@@ -219,26 +188,10 @@ class MainActivity : Activity() {
         rootLayout.addView(topLayout)
         rootLayout.addView(animationContainer)
         rootLayout.addView(bottomCardLayout)
-        rootLayout.addView(btnSoundToggle) // 放入音效按鈕
         rootLayout.addView(btnExit)
 
         setContentView(rootLayout)
         valStatus.text = stringFromJNI()
-
-        // 初始化 MediaPlayer (動態尋找 res/raw/background_sound)
-        try {
-            val resourceId = resources.getIdentifier("background_sound", "raw", packageName)
-            if (resourceId != 0) {
-                mediaPlayer = MediaPlayer.create(this, resourceId)
-                mediaPlayer?.isLooping = true // 設定無限迴圈播放
-                mediaPlayer?.setVolume(0.4f, 0.4f) // 將音量預設調為 40%，當作白噪音不刺耳
-                if (isSoundEnabled) {
-                    mediaPlayer?.start()
-                }
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
 
         val serviceIntent = Intent(this, MiningService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -250,22 +203,6 @@ class MainActivity : Activity() {
         startClock()
         fetchWeather()
         registerBatteryReceiver()
-    }
-
-    // 新增：生命週期控制 - 畫面出現時恢復播放
-    override fun onResume() {
-        super.onResume()
-        if (isSoundEnabled && mediaPlayer?.isPlaying == false) {
-            mediaPlayer?.start()
-        }
-    }
-
-    // 新增：生命週期控制 - 畫面隱藏時暫停播放
-    override fun onPause() {
-        super.onPause()
-        if (mediaPlayer?.isPlaying == true) {
-            mediaPlayer?.pause()
-        }
     }
 
     private fun createDashboardRow(parent: LinearLayout, label: String, valueColor: String): TextView {
@@ -300,7 +237,28 @@ class MainActivity : Activity() {
         return tvValue
     }
 
+    // 更新：中大獎黃金彈出視窗 + 播放專屬音效
     private fun showJackpotDialog(winningNonce: Int, winningHash: String) {
+        // 1. 觸發音效播放 (播完自動釋放記憶體)
+        try {
+            // 先找 jackpot_sound，找不到就 fallback 到你剛放的 background_sound
+            var resourceId = resources.getIdentifier("jackpot_sound", "raw", packageName)
+            if (resourceId == 0) {
+                resourceId = resources.getIdentifier("background_sound", "raw", packageName)
+            }
+            
+            if (resourceId != 0) {
+                val mp = MediaPlayer.create(this, resourceId)
+                mp.setOnCompletionListener { 
+                    it.release() // 音效播完立刻回收，不佔資源
+                }
+                mp.start()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // 2. 顯示黃金視窗
         val dialogView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -382,10 +340,6 @@ class MainActivity : Activity() {
 
     private fun executeGracefulShutdown() {
         valStatus.text = "系統安全關閉中..."
-        
-        // 提早停止音效
-        mediaPlayer?.stop()
-        
         stopMiningNative()
         
         val stopIntent = Intent(this, MiningService::class.java).apply {
@@ -540,8 +494,5 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(systemReceiver)
-        // 確實釋放 MediaPlayer 資源避免 Memory Leak
-        mediaPlayer?.release()
-        mediaPlayer = null
     }
 }
