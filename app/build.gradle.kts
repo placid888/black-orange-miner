@@ -40,4 +40,5 @@ android {
 
 dependencies {
     implementation("com.airbnb.android:lottie:6.1.0")
+    implementation("androidx.appcompat:appcompat:1.6.1")
 }
