@@ -1,5 +1,6 @@
 package com.manekiminer.app
 
+import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -9,8 +10,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.widget.TextView
-import androidx.annotation.Keep
-import androidx.appcompat.app.AppCompatActivity
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -21,7 +20,7 @@ import java.util.Date
 import java.util.Locale
 import kotlin.concurrent.thread
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : Activity() {
 
     private lateinit var tvTime: TextView
     private lateinit var tvDate: TextView
@@ -74,7 +73,6 @@ class MainActivity : AppCompatActivity() {
     private fun fetchWeather() {
         thread {
             try {
-                // 新竹縣湖口鄉座標
                 val url = URL("https://api.open-meteo.com/v1/forecast?latitude=24.9038&longitude=121.0436&current_weather=true")
                 val connection = url.openConnection() as HttpURLConnection
                 connection.requestMethod = "GET"
@@ -148,7 +146,6 @@ class MainActivity : AppCompatActivity() {
         unregisterReceiver(powerReceiver)
     }
 
-    @Keep
     fun updateMiningStatus(status: String, nonce: Int, hash: String) {
         runOnUiThread {
             if (nonce == 0 && hash.isEmpty()) {
