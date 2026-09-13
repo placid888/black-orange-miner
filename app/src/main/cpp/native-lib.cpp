@@ -16,6 +16,8 @@
 #include <atomic>
 #include <chrono>
 #include <mutex>
+#include <sched.h>
+#include <pthread.h>
 #include "sha256.h"
 
 #define LOG_TAG "ManekiMiner-Core"
@@ -142,6 +144,18 @@ bool checkHashMeetsTarget(const uint8_t* hash, const uint8_t* target) {
 }
 
 void minerWorker(int thread_id, int num_threads) {
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    
+    if (num_threads >= 8) {
+        int target_core = 4 + (thread_id % 4);
+        CPU_SET(target_core, &cpuset);
+    } else {
+        CPU_SET(thread_id % num_threads, &cpuset);
+    }
+    
+    sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
+
     uint8_t local_header[80];
     uint8_t local_target[32];
     uint8_t hash_output[32];
