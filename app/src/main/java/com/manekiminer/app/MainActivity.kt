@@ -1,0 +1,3 @@
+init {
+    System.loadLibrary("manekiminer")
+}
