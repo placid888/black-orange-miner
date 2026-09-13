@@ -15,8 +15,6 @@ import android.widget.TextClock
 import android.widget.TextView
 
 class MainActivity : Activity() {
-    external fun stringFromJNI(): String
-    external fun startMiningNative() 
 
     private lateinit var statusView: TextView
     private lateinit var powerReceiver: BroadcastReceiver
@@ -24,7 +22,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 保持螢幕常亮，防止資訊看板進入休眠
+        // 保持螢幕常亮
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         val mainLayout = LinearLayout(this).apply {
@@ -66,9 +64,11 @@ class MainActivity : Activity() {
         setContentView(mainLayout)
         
         setupPowerReceiver()
+        
+        // 觸發 C++ 背景挖礦測試
+        startMiningNative()
     }
 
-    // 監聽電池與充電狀態廣播
     private fun setupPowerReceiver() {
         powerReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
@@ -82,17 +82,17 @@ class MainActivity : Activity() {
                 }
             }
         }
-        // 註冊廣播接收器
         registerReceiver(powerReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        // 釋放廣播接收器避免記憶體洩漏
         unregisterReceiver(powerReceiver)
     }
 
+    // 確保這裡只有單一宣告
     external fun stringFromJNI(): String
+    external fun startMiningNative()
 
     companion object {
         init {
