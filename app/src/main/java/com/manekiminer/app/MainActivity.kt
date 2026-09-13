@@ -1,19 +1,25 @@
 package com.manekiminer.app
 
+import android.animation.ObjectAnimator
 import android.app.Activity
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.BatteryManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.TypedValue
 import android.view.Gravity
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.airbnb.lottie.LottieAnimationView
+import com.airbnb.lottie.LottieDrawable
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -31,6 +37,7 @@ class MainActivity : Activity() {
     private lateinit var tvWeather: TextView
     private lateinit var tvMode: TextView
     private lateinit var tvMiningStatus: TextView
+    private lateinit var catLottieView: LottieAnimationView
 
     private val handler = Handler(Looper.getMainLooper())
     private var isMining = false
@@ -47,59 +54,140 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val layout = LinearLayout(this).apply {
+        // 1. 根佈局 (深灰底色)
+        val rootLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#121212")) // 較柔和的深灰色
+        }
+
+        // 2. 頂部狀態列
+        val topLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            setBackgroundColor(Color.BLACK)
-            setPadding(32, 32, 32, 32)
+            setPadding(32, 48, 32, 16)
         }
 
         tvTime = TextView(this).apply {
             setTextColor(Color.parseColor("#FFA500"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 56f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 42f) // 縮小時間字體
             gravity = Gravity.CENTER
         }
 
         tvDate = TextView(this).apply {
-            setTextColor(Color.parseColor("#FFA500"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            setTextColor(Color.parseColor("#CCCCCC")) // 改為淺灰增加層次
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
             gravity = Gravity.CENTER
-            setPadding(0, 16, 0, 16)
+            setPadding(0, 8, 0, 8)
         }
 
         tvWeather = TextView(this).apply {
-            setTextColor(Color.parseColor("#FFA500"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            setTextColor(Color.parseColor("#AAAAAA"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             gravity = Gravity.CENTER
-            setPadding(0, 0, 0, 32)
+        }
+
+        topLayout.addView(tvTime)
+        topLayout.addView(tvDate)
+        topLayout.addView(tvWeather)
+
+        // 3. 中央動畫舞台 (使用 Weight 自動撐開空間)
+        val animationContainer = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1.0f // Weight = 1
+            )
+        }
+
+        catLottieView = LottieAnimationView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ).apply {
+                gravity = Gravity.CENTER
+                setMargins(32, 32, 32, 32)
+            }
+            repeatCount = LottieDrawable.INFINITE
+        }
+        animationContainer.addView(catLottieView)
+
+        // 4. 底部數據卡片
+        val bottomCardLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(32, 48, 32, 48)
+            
+            // 設定半透明圓角背景
+            val cardBackground = GradientDrawable().apply {
+                setColor(Color.parseColor("#1A1A1A")) 
+                cornerRadius = 48f 
+                setStroke(3, Color.parseColor("#33FFA500")) // 微透明橘色邊框
+            }
+            background = cardBackground
+            
+            val params = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(48, 16, 48, 64) // 卡片外部邊距
+            }
+            layoutParams = params
         }
 
         tvMode = TextView(this).apply {
             setTextColor(Color.parseColor("#FFA500"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
+            setPadding(0, 0, 0, 16)
         }
 
         tvMiningStatus = TextView(this).apply {
-            setTextColor(Color.parseColor("#FFA500"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTextColor(Color.parseColor("#00E676")) // 挖礦數據改為科技感亮綠色
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            typeface = Typeface.MONOSPACE // 使用等寬字體對齊 Hash 值
             gravity = Gravity.CENTER
-            setPadding(0, 8, 0, 0)
         }
 
-        layout.addView(tvTime)
-        layout.addView(tvDate)
-        layout.addView(tvWeather)
-        layout.addView(tvMode)
-        layout.addView(tvMiningStatus)
+        bottomCardLayout.addView(tvMode)
+        bottomCardLayout.addView(tvMiningStatus)
 
-        setContentView(layout)
+        // 將三大區塊加入根佈局
+        rootLayout.addView(topLayout)
+        rootLayout.addView(animationContainer)
+        rootLayout.addView(bottomCardLayout)
+
+        setContentView(rootLayout)
 
         tvMiningStatus.text = stringFromJNI()
 
         startClock()
         fetchWeather()
         registerBatteryReceiver()
+    }
+
+    private fun switchCatMode(isPluggedIn: Boolean) {
+        catLottieView.cancelAnimation()
+        
+        if (isPluggedIn) {
+            catLottieView.setAnimation("orange_cat.json")
+            catLottieView.scaleX = 1.2f // 小菊比較胖，放大
+            catLottieView.scaleY = 1.2f
+            catLottieView.speed = 1.5f  // 全速運算，動畫加快
+        } else {
+            catLottieView.setAnimation("black_cat.json")
+            catLottieView.scaleX = 0.85f // 小月瘦小，縮小
+            catLottieView.scaleY = 0.85f
+            catLottieView.speed = 0.6f   // 待機模式，動作放緩
+        }
+        
+        catLottieView.alpha = 0f
+        catLottieView.playAnimation()
+        
+        ObjectAnimator.ofFloat(catLottieView, "alpha", 0f, 1f).apply {
+            duration = 600
+            start()
+        }
     }
 
     private fun startClock() {
@@ -149,14 +237,17 @@ class MainActivity : Activity() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
                 Intent.ACTION_POWER_CONNECTED -> {
-                    tvMode.text = "【小菊模式】電源已連接，允許全速運算"
+                    tvMode.text = "【小菊模式】電源已連接\n允許全速運算"
+                    switchCatMode(true)
                     if (!isMining) {
                         isMining = true
                         startMiningNative()
                     }
                 }
                 Intent.ACTION_POWER_DISCONNECTED -> {
-                    tvMode.text = "【小月模式】待機監視中，暫停運算"
+                    tvMode.text = "【小月模式】待機監視中\n暫停運算"
+                    switchCatMode(false)
+                    isMining = false
                 }
             }
         }
@@ -176,13 +267,15 @@ class MainActivity : Activity() {
         val isCharging: Boolean = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
 
         if (isCharging) {
-            tvMode.text = "【小菊模式】電源已連接，允許全速運算"
+            tvMode.text = "【小菊模式】電源已連接\n允許全速運算"
+            switchCatMode(true)
             if (!isMining) {
                 isMining = true
                 startMiningNative()
             }
         } else {
-            tvMode.text = "【小月模式】待機監視中，暫停運算"
+            tvMode.text = "【小月模式】待機監視中\n暫停運算"
+            switchCatMode(false)
         }
     }
 
@@ -196,7 +289,9 @@ class MainActivity : Activity() {
             if (nonce == 0 && hash.isEmpty()) {
                 tvMiningStatus.text = status
             } else {
-                tvMiningStatus.text = "$status\nNonce: $nonce\nHash: $hash"
+                // 將過長的 Hash 截斷顯示前後8碼，中間用 ... 縮略，保持介面簡潔
+                val shortHash = if (hash.length > 16) "${hash.take(8)}...${hash.takeLast(8)}" else hash
+                tvMiningStatus.text = "$status\nNonce: $nonce\nHash: $shortHash"
             }
         }
     }
