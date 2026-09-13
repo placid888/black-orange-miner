@@ -28,33 +28,39 @@ const char* WALLET_ADDRESS = "bc1qvn2rhjw553l2ttplyqpt2kaepd32dh5q6kfac9";
 JavaVM* g_jvm = nullptr;
 jobject g_main_activity = nullptr;
 
-// 油門狀態全域變數，預設為全速
 std::atomic<bool> g_is_full_speed(true);
-
-// 新增：退出機制全域變數
 std::atomic<bool> g_is_mining_running(false);
-std::atomic<int> g_current_sock(-1); // 紀錄當前 Socket，用於強制中斷 recv 阻塞
+std::atomic<int> g_current_sock(-1);
+std::atomic<int> g_accepted_shares(0);
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     g_jvm = vm;
     return JNI_VERSION_1_6;
 }
 
-void updateUI(const char* status, uint32_t nonce, const char* hash) {
+// 升級：JNI 簽名大幅擴展，加入 uptime, job_id, difficulty
+void updateUI(const char* status, uint32_t nonce, const char* hash, double hashrate, int shares, long uptime, const char* job_id, const char* difficulty) {
     if (g_jvm == nullptr || g_main_activity == nullptr) return;
 
     JNIEnv* env;
     if (g_jvm->AttachCurrentThread(&env, nullptr) != JNI_OK) return;
 
     jclass clazz = env->GetObjectClass(g_main_activity);
-    jmethodID methodID = env->GetMethodID(clazz, "updateMiningStatus", "(Ljava/lang/String;ILjava/lang/String;)V");
+    // 簽名：String, Int, String, Double, Int, Long, String, String
+    jmethodID methodID = env->GetMethodID(clazz, "updateMiningStatus", "(Ljava/lang/String;ILjava/lang/String;DIJLjava/lang/String;Ljava/lang/String;)V");
 
     if (methodID != nullptr) {
         jstring jStatus = env->NewStringUTF(status);
         jstring jHash = env->NewStringUTF(hash);
-        env->CallVoidMethod(g_main_activity, methodID, jStatus, nonce, jHash);
+        jstring jJobId = env->NewStringUTF(job_id);
+        jstring jDifficulty = env->NewStringUTF(difficulty);
+        
+        env->CallVoidMethod(g_main_activity, methodID, jStatus, nonce, jHash, hashrate, shares, (jlong)uptime, jJobId, jDifficulty);
+        
         env->DeleteLocalRef(jStatus);
         env->DeleteLocalRef(jHash);
+        env->DeleteLocalRef(jJobId);
+        env->DeleteLocalRef(jDifficulty);
     }
     
     g_jvm->DetachCurrentThread();
@@ -84,11 +90,9 @@ void reverseBytes(uint8_t* data, size_t len) {
 void double_sha256(const uint8_t* data, size_t len, uint8_t* hash_out) {
     SHA256_CTX ctx;
     uint8_t first_hash[32];
-
     sha256_init(&ctx);
     sha256_update(&ctx, data, len);
     sha256_final(&ctx, first_hash);
-
     sha256_init(&ctx);
     sha256_update(&ctx, first_hash, 32);
     sha256_final(&ctx, hash_out);
@@ -110,7 +114,6 @@ void getTargetFromNbits(const std::string& nbits_hex, uint8_t* target) {
     uint32_t bits = strtoul(nbits_hex.c_str(), nullptr, 16);
     uint8_t shift = (bits >> 24) & 0xFF;
     uint32_t mantissa = bits & 0x00FFFFFF;
-
     if (shift <= 32 && shift >= 3) {
         target[32 - shift] = (mantissa >> 16) & 0xFF;
         target[32 - shift + 1] = (mantissa >> 8) & 0xFF;
@@ -128,28 +131,29 @@ bool checkHashMeetsTarget(const uint8_t* hash, const uint8_t* target) {
 }
 
 void startMiningLoop() {
-    updateUI("引擎啟動中，準備連線...", 0, "");
+    // 記錄挖礦全生命週期的啟動時間
+    auto session_start_time = std::chrono::steady_clock::now();
     
-    // 將原本的 while(true) 改為受控迴圈
+    updateUI("🟡 引擎啟動中，準備連線...", 0, "", 0.0, g_accepted_shares.load(), 0, "-", "-");
+    
     while (g_is_mining_running) {
-        LOGI("連線至 Solo 礦池 %s:%d", POOL_HOST, POOL_PORT);
-
+        long uptime_sec = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - session_start_time).count();
+        
         struct hostent *host = gethostbyname(POOL_HOST);
         if (host == nullptr) {
-            updateUI("DNS 解析失敗，等待重試", 0, "");
+            updateUI("🔴 DNS 解析失敗，等待重試", 0, "", 0.0, g_accepted_shares.load(), uptime_sec, "-", "-");
             std::this_thread::sleep_for(std::chrono::seconds(5));
             continue;
         }
 
         int sock = socket(AF_INET, SOCK_STREAM, 0);
         if (sock < 0) {
-            updateUI("Socket 建立失敗", 0, "");
+            updateUI("🔴 Socket 建立失敗", 0, "", 0.0, g_accepted_shares.load(), uptime_sec, "-", "-");
             std::this_thread::sleep_for(std::chrono::seconds(5));
             continue;
         }
         
-        g_current_sock = sock; // 紀錄當前 socket，方便從外部 shutdown
-
+        g_current_sock = sock;
         struct sockaddr_in server_addr;
         memset(&server_addr, 0, sizeof(server_addr));
         server_addr.sin_family = AF_INET;
@@ -157,14 +161,14 @@ void startMiningLoop() {
         memcpy(&server_addr.sin_addr.s_addr, host->h_addr, host->h_length);
 
         if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-            updateUI("礦池伺服器連線失敗", 0, "");
+            updateUI("🔴 礦池伺服器連線失敗", 0, "", 0.0, g_accepted_shares.load(), uptime_sec, "-", "-");
             close(sock);
             g_current_sock = -1;
             std::this_thread::sleep_for(std::chrono::seconds(5));
             continue;
         }
         
-        updateUI("成功連線至礦池", 0, "");
+        updateUI("🟢 成功連線，等待任務分配...", 0, "", 0.0, g_accepted_shares.load(), uptime_sec, "-", "-");
 
         const char* subscribe_msg = "{\"id\": 1, \"method\": \"mining.subscribe\", \"params\": [\"ManekiMiner/1.0\"]}\n";
         send(sock, subscribe_msg, strlen(subscribe_msg), 0);
@@ -177,19 +181,18 @@ void startMiningLoop() {
         std::string current_extranonce1 = "";
         int current_extranonce2_size = 0;
         
-        std::string current_job_id = "";
+        std::string current_job_id = "-";
         std::string current_prevhash = "";
         std::string current_coinb1 = "";
         std::string current_coinb2 = "";
         std::string current_version = "";
-        std::string current_nbit = "";
+        std::string current_nbit = "-";
         std::string current_ntime = "";
         std::vector<std::string> current_merkle_branch;
         
         uint8_t target_difficulty[32];
         memset(target_difficulty, 0, 32);
 
-        // 監聽執行緒也加入 g_is_mining_running 判斷
         std::thread listener_thread([sock, &is_connected, &current_extranonce1, &current_extranonce2_size, &current_job_id, &current_prevhash, &current_coinb1, &current_coinb2, &current_version, &current_nbit, &current_ntime, &current_merkle_branch, &target_difficulty]() {
             char rx_buffer[4096];
             while (is_connected && g_is_mining_running) {
@@ -199,9 +202,7 @@ void startMiningLoop() {
                     is_connected = false;
                     break;
                 }
-
                 std::string payload(rx_buffer);
-                
                 if (payload.find("\"id\": 1") != std::string::npos || payload.find("\"id\":1") != std::string::npos) {
                     std::regex sub_regex(R"REGEX("result":\s*\[.*,\s*"([a-fA-F0-9]+)",\s*(\d+)\s*\])REGEX");
                     std::smatch match;
@@ -210,7 +211,6 @@ void startMiningLoop() {
                         current_extranonce2_size = std::stoi(match.str(2));
                     }
                 }
-
                 if (payload.find("mining.notify") != std::string::npos) {
                     std::regex notify_regex(R"REGEX("params":\s*\[\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*\[(.*?)\]\s*,\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)")REGEX");
                     std::smatch match;
@@ -223,7 +223,6 @@ void startMiningLoop() {
                         current_version = match.str(6);
                         current_nbit = match.str(7);
                         current_ntime = match.str(8);
-                        
                         current_merkle_branch = extractArrayElements(merkle_array_str);
                         getTargetFromNbits(current_nbit, target_difficulty);
                     }
@@ -235,79 +234,68 @@ void startMiningLoop() {
         uint32_t nonce = 0;
         uint32_t extranonce2_val = 0;
         uint8_t hash_output[32];
+        auto last_time = std::chrono::steady_clock::now();
+        uint64_t hashes_since_last = 0;
 
-        // 挖礦核心迴圈加入 g_is_mining_running 判斷
         while (is_connected && g_is_mining_running) {
             if (current_prevhash.empty() || current_extranonce1.empty() || current_version.empty()) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 continue;
             }
 
-            // 油門控制邏輯 (Throttling)
             if (!g_is_full_speed) {
-                if (nonce % 1000 == 0) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                }
+                if (nonce % 1000 == 0) std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
 
             std::stringstream en2_ss;
             en2_ss << std::hex << std::setw(current_extranonce2_size * 2) << std::setfill('0') << extranonce2_val;
             std::string extranonce2 = en2_ss.str();
-
             std::string coinbase_hex = current_coinb1 + current_extranonce1 + extranonce2 + current_coinb2;
-            
             size_t coinbase_len = coinbase_hex.length() / 2;
             uint8_t coinbase_bytes[1024]; 
             hexStringToBytes(coinbase_hex, coinbase_bytes);
 
             uint8_t merkle_root[32];
             double_sha256(coinbase_bytes, coinbase_len, merkle_root);
-
             for (const std::string& branch_hex : current_merkle_branch) {
                 uint8_t branch_bytes[32];
                 hexStringToBytes(branch_hex, branch_bytes);
-                
                 uint8_t concat[64];
                 memcpy(concat, merkle_root, 32);
                 memcpy(concat + 32, branch_bytes, 32);
-                
                 double_sha256(concat, 64, merkle_root);
             }
 
             uint8_t block_header[80];
             memset(block_header, 0, sizeof(block_header));
-
             hexStringToBytes(current_version, block_header);
             reverseBytes(block_header, 4);
-
             hexStringToBytes(current_prevhash, block_header + 4);
             memcpy(block_header + 36, merkle_root, 32);
-
             hexStringToBytes(current_ntime, block_header + 68);
             reverseBytes(block_header + 68, 4);
-
             hexStringToBytes(current_nbit, block_header + 72);
             reverseBytes(block_header + 72, 4);
-
             block_header[76] = (nonce >> 0) & 0xFF;
             block_header[77] = (nonce >> 8) & 0xFF;
             block_header[78] = (nonce >> 16) & 0xFF;
             block_header[79] = (nonce >> 24) & 0xFF;
 
             double_sha256(block_header, 80, hash_output);
+            hashes_since_last++;
 
             if (checkHashMeetsTarget(hash_output, target_difficulty)) {
+                g_accepted_shares++;
+                uptime_sec = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - session_start_time).count();
                 std::string success_hash = bytesToHexString(hash_output, 32);
-                updateUI("找到區塊並提交中！", nonce, success_hash.c_str());
+                updateUI("🎯 找到區塊並提交中！", nonce, success_hash.c_str(), 0.0, g_accepted_shares.load(), uptime_sec, current_job_id.c_str(), current_nbit.c_str());
                 
                 char nonce_hex[9];
                 snprintf(nonce_hex, sizeof(nonce_hex), "%08x", nonce);
-
                 char submit_msg[512];
                 snprintf(submit_msg, sizeof(submit_msg), 
                          "{\"id\": 4, \"method\": \"mining.submit\", \"params\": [\"%s\", \"%s\", \"%s\", \"%s\", \"%s\"]}\n", 
                          WALLET_ADDRESS, current_job_id.c_str(), extranonce2.c_str(), current_ntime.c_str(), nonce_hex);
-                
                 send(sock, submit_msg, strlen(submit_msg), 0);
             }
 
@@ -317,46 +305,48 @@ void startMiningLoop() {
                 nonce = 0;
             }
 
-            if (nonce % 100000 == 0) {
-                std::string block_hash_hex = bytesToHexString(hash_output, 32);
-                if (g_is_full_speed) {
-                    updateUI("全速運算中", nonce, block_hash_hex.c_str());
-                } else {
-                    updateUI("低功耗運算中", nonce, block_hash_hex.c_str());
+            if (hashes_since_last % 5000 == 0) {
+                auto now = std::chrono::steady_clock::now();
+                std::chrono::duration<double> elapsed = now - last_time;
+                if (elapsed.count() >= 1.0) { 
+                    uptime_sec = std::chrono::duration_cast<std::chrono::seconds>(now - session_start_time).count();
+                    double hashrate = hashes_since_last / elapsed.count();
+                    std::string block_hash_hex = bytesToHexString(hash_output, 32);
+                    
+                    if (g_is_full_speed) {
+                        updateUI("🟢 運算中", nonce, block_hash_hex.c_str(), hashrate, g_accepted_shares.load(), uptime_sec, current_job_id.c_str(), current_nbit.c_str());
+                    } else {
+                        updateUI("🟡 節能運算中", nonce, block_hash_hex.c_str(), hashrate, g_accepted_shares.load(), uptime_sec, current_job_id.c_str(), current_nbit.c_str());
+                    }
+                    
+                    last_time = now;
+                    hashes_since_last = 0;
                 }
             }
         }
 
-        // 迴圈結束清理資源
         int current_sock = g_current_sock.exchange(-1);
-        if (current_sock >= 0) {
-            close(current_sock);
-        }
+        if (current_sock >= 0) close(current_sock);
 
+        uptime_sec = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - session_start_time).count();
         if (g_is_mining_running) {
-            updateUI("連線中斷，準備重新連線", 0, "");
+            updateUI("🔴 連線中斷，準備重新連線", 0, "", 0.0, g_accepted_shares.load(), uptime_sec, "-", "-");
             std::this_thread::sleep_for(std::chrono::seconds(5));
         } else {
-            updateUI("挖礦引擎已安全關閉", 0, "");
+            updateUI("⚪ 挖礦引擎已安全關閉", 0, "", 0.0, g_accepted_shares.load(), uptime_sec, "-", "-");
         }
     }
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_manekiminer_app_MainActivity_stringFromJNI(
-        JNIEnv* env,
-        jobject /* this */) {
-    std::string status = "引擎就緒。UI 回呼機制已掛載。";
-    return env->NewStringUTF(status.c_str());
+Java_com_manekiminer_app_MainActivity_stringFromJNI(JNIEnv* env, jobject /* this */) {
+    return env->NewStringUTF("引擎就緒。儀表板連線中...");
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_manekiminer_app_MainActivity_startMiningNative(JNIEnv *env, jobject thiz) {
-    if (g_main_activity != nullptr) {
-        env->DeleteGlobalRef(g_main_activity);
-    }
+    if (g_main_activity != nullptr) env->DeleteGlobalRef(g_main_activity);
     g_main_activity = env->NewGlobalRef(thiz);
-    
     g_is_mining_running = true;
     std::thread minerThread(startMiningLoop);
     minerThread.detach();
@@ -365,22 +355,11 @@ Java_com_manekiminer_app_MainActivity_startMiningNative(JNIEnv *env, jobject thi
 extern "C" JNIEXPORT void JNICALL
 Java_com_manekiminer_app_MainActivity_setMiningIntensity(JNIEnv *env, jobject thiz, jboolean is_full_speed) {
     g_is_full_speed = is_full_speed;
-    if (is_full_speed) {
-        LOGI("引擎控制：切換至全速運算模式");
-    } else {
-        LOGI("引擎控制：切換至低功耗運算模式");
-    }
 }
 
-// 新增：停止挖礦引擎與連線
 extern "C" JNIEXPORT void JNICALL
 Java_com_manekiminer_app_MainActivity_stopMiningNative(JNIEnv *env, jobject thiz) {
-    LOGI("引擎控制：接收到停止訊號，準備安全退出");
-    
-    // 1. 打破運算迴圈與外層重新連線迴圈
     g_is_mining_running = false;
-    
-    // 2. 強制中斷 Socket 阻塞狀態，讓 recv() 瞬間解開
     int sock = g_current_sock.exchange(-1);
     if (sock >= 0) {
         shutdown(sock, SHUT_RDWR);

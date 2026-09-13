@@ -37,15 +37,23 @@ class MainActivity : Activity() {
     private lateinit var tvTime: TextView
     private lateinit var tvDate: TextView
     private lateinit var tvWeather: TextView
-    private lateinit var tvBatteryTemp: TextView // 新增：顯示電池溫度
+    private lateinit var tvBatteryTemp: TextView
     private lateinit var tvMode: TextView
-    private lateinit var tvMiningStatus: TextView
     private lateinit var catLottieView: LottieAnimationView
+
+    // 擴充：更多專業儀表板 UI 元件
+    private lateinit var valStatus: TextView
+    private lateinit var valUptime: TextView
+    private lateinit var valHashrate: TextView
+    private lateinit var valJobId: TextView
+    private lateinit var valDifficulty: TextView
+    private lateinit var valShares: TextView
+    private lateinit var valHash: TextView
+    private lateinit var valNonce: TextView
 
     private val handler = Handler(Looper.getMainLooper())
     private var isMining = false
 
-    // 新增：狀態追蹤，防止廣播頻繁觸發導致動畫不斷重啟
     private enum class MiningMode { FULL_SPEED, LOW_POWER, THERMAL_THROTTLE }
     private var currentMode: MiningMode? = null
     private var isPluggedIn = false
@@ -54,7 +62,7 @@ class MainActivity : Activity() {
     external fun stringFromJNI(): String
     external fun startMiningNative()
     external fun setMiningIntensity(isFullSpeed: Boolean)
-    external fun stopMiningNative() // 新增：C++ 的停止開關
+    external fun stopMiningNative()
 
     companion object {
         init {
@@ -95,9 +103,8 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
         }
 
-        // 新增：電池溫度 UI 元件
         tvBatteryTemp = TextView(this).apply {
-            setTextColor(Color.parseColor("#4CAF50")) // 預設綠色
+            setTextColor(Color.parseColor("#4CAF50"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             gravity = Gravity.CENTER
             setPadding(0, 4, 0, 0)
@@ -110,9 +117,7 @@ class MainActivity : Activity() {
 
         val animationContainer = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                0,
-                1.0f 
+                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f 
             )
         }
 
@@ -130,16 +135,12 @@ class MainActivity : Activity() {
 
         val bottomCardLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(32, 48, 32, 48)
-            
-            val cardBackground = GradientDrawable().apply {
-                setColor(Color.parseColor("#1A1A1A")) 
-                cornerRadius = 48f 
-                setStroke(3, Color.parseColor("#33FFA500")) 
+            setPadding(48, 32, 48, 48)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#121212")) 
+                cornerRadius = 32f 
+                setStroke(2, Color.parseColor("#33FFFFFF")) 
             }
-            background = cardBackground
-            
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -150,52 +151,47 @@ class MainActivity : Activity() {
 
         tvMode = TextView(this).apply {
             setTextColor(Color.parseColor("#FFA500"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
             setPadding(0, 0, 0, 16)
         }
-
-        tvMiningStatus = TextView(this).apply {
-            setTextColor(Color.parseColor("#00E676"))
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
-            typeface = Typeface.MONOSPACE
-            gravity = Gravity.CENTER
-        }
-
         bottomCardLayout.addView(tvMode)
-        bottomCardLayout.addView(tvMiningStatus)
 
-        // 新增：安全退出按鈕
+        // 動態生成 8 欄專業儀表板清單
+        valStatus = createDashboardRow(bottomCardLayout, "節點狀態", "#00E676")
+        valUptime = createDashboardRow(bottomCardLayout, "運行時間", "#E0E0E0")
+        valHashrate = createDashboardRow(bottomCardLayout, "即時算力", "#00B0FF")
+        valJobId = createDashboardRow(bottomCardLayout, "當前任務", "#FF9800")
+        valDifficulty = createDashboardRow(bottomCardLayout, "區塊難度", "#00BCD4")
+        valShares = createDashboardRow(bottomCardLayout, "有效提交", "#FFD600")
+        valNonce = createDashboardRow(bottomCardLayout, "隨機雜湊", "#B388FF")
+        valHash = createDashboardRow(bottomCardLayout, "當前運算", "#9E9E9E")
+
         val btnExit = Button(this).apply {
             text = "停止挖礦並退出系統"
             setTextColor(Color.WHITE)
             typeface = Typeface.DEFAULT_BOLD
-            
             background = GradientDrawable().apply {
-                setColor(Color.parseColor("#D32F2F")) // 暗紅色
+                setColor(Color.parseColor("#D32F2F")) 
                 cornerRadius = 24f
             }
-            
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
                 setMargins(48, 0, 48, 48)
             }
-            
-            setOnClickListener {
-                executeGracefulShutdown()
-            }
+            setOnClickListener { executeGracefulShutdown() }
         }
 
         rootLayout.addView(topLayout)
         rootLayout.addView(animationContainer)
         rootLayout.addView(bottomCardLayout)
-        rootLayout.addView(btnExit) // 將按鈕加入底部
+        rootLayout.addView(btnExit)
 
         setContentView(rootLayout)
-        tvMiningStatus.text = stringFromJNI()
+        valStatus.text = stringFromJNI()
 
         val serviceIntent = Intent(this, MiningService::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -209,36 +205,90 @@ class MainActivity : Activity() {
         registerBatteryReceiver()
     }
 
-    // 新增：整合退出邏輯
-    private fun executeGracefulShutdown() {
-        tvMiningStatus.text = "系統安全關閉中..."
+    private fun createDashboardRow(parent: LinearLayout, label: String, valueColor: String): TextView {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, 6, 0, 6) } // 縮小間距讓更多資訊塞得下
+        }
         
-        // 1. 中斷 C++ 底層運算迴圈與 Socket
+        val tvLabel = TextView(this).apply {
+            text = label
+            setTextColor(Color.parseColor("#888888"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            typeface = Typeface.DEFAULT_BOLD
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        
+        val tvValue = TextView(this).apply {
+            text = "-"
+            setTextColor(Color.parseColor(valueColor))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            typeface = Typeface.MONOSPACE
+            gravity = Gravity.END
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 2.5f)
+        }
+        
+        row.addView(tvLabel)
+        row.addView(tvValue)
+        parent.addView(row)
+        return tvValue
+    }
+
+    // 升級：對接 C++ 的全新資料流
+    fun updateMiningStatus(status: String, nonce: Int, hash: String, hashrate: Double, shares: Int, uptime: Long, jobId: String, difficulty: String) {
+        runOnUiThread {
+            valStatus.text = status
+            
+            // 轉換 uptime 成為 HH:mm:ss
+            if (uptime > 0) {
+                val hours = uptime / 3600
+                val minutes = (uptime % 3600) / 60
+                val seconds = uptime % 60
+                valUptime.text = String.format(Locale.US, "%02d:%02d:%02d", hours, minutes, seconds)
+            }
+
+            // 更新 Job 與 Difficulty
+            if (jobId != "-") valJobId.text = jobId
+            if (difficulty != "-") valDifficulty.text = "0x$difficulty"
+
+            valHashrate.text = when {
+                hashrate >= 1_000_000 -> String.format(Locale.US, "%.2f MH/s", hashrate / 1_000_000)
+                hashrate >= 1_000 -> String.format(Locale.US, "%.2f kH/s", hashrate / 1_000)
+                else -> String.format(Locale.US, "%.2f H/s", hashrate)
+            }
+            
+            valShares.text = "$shares Shares"
+            
+            if (nonce != 0 || hash.isNotEmpty()) {
+                valNonce.text = String.format("0x%08X", nonce) 
+                valHash.text = if (hash.length > 16) "${hash.take(8)}...${hash.takeLast(8)}" else hash
+            }
+        }
+    }
+
+    private fun executeGracefulShutdown() {
+        valStatus.text = "系統安全關閉中..."
         stopMiningNative()
         
-        // 2. 通知 Foreground Service 釋放 WakeLock 並自我了斷
         val stopIntent = Intent(this, MiningService::class.java).apply {
             action = MiningService.ACTION_STOP_SERVICE
         }
         startService(stopIntent)
         
-        // 3. 延遲 500ms 確保資源釋放後，徹底移除多工任務
-        handler.postDelayed({
-            finishAndRemoveTask()
-        }, 500)
+        handler.postDelayed({ finishAndRemoveTask() }, 500)
     }
 
-    // 核心邏輯：狀態機，避免頻繁呼叫動畫重置
     private fun updateMiningMode() {
-        // 更新溫度 UI
         tvBatteryTemp.text = "電池溫度: ${batteryTemp}°C"
         if (batteryTemp >= 40.0f) {
-            tvBatteryTemp.setTextColor(Color.parseColor("#FF5252")) // 紅色警告
+            tvBatteryTemp.setTextColor(Color.parseColor("#FF5252")) 
         } else {
-            tvBatteryTemp.setTextColor(Color.parseColor("#4CAF50")) // 正常綠色
+            tvBatteryTemp.setTextColor(Color.parseColor("#4CAF50")) 
         }
 
-        // 判斷下一個狀態
         val targetMode = if (batteryTemp >= 40.0f) {
             MiningMode.THERMAL_THROTTLE
         } else if (isPluggedIn) {
@@ -247,25 +297,24 @@ class MainActivity : Activity() {
             MiningMode.LOW_POWER
         }
 
-        // 如果狀態沒有改變，則不執行後續更新，避免動畫閃爍
         if (currentMode == targetMode) return
         currentMode = targetMode
 
         when (targetMode) {
             MiningMode.THERMAL_THROTTLE -> {
-                tvMode.text = "【高溫保護】電池過熱\n強制低功耗黑貓模式"
+                tvMode.text = "【高溫保護】強制低功耗黑貓模式"
                 tvMode.setTextColor(Color.parseColor("#FF5252"))
                 switchCatMode(false)
                 setMiningIntensity(false)
             }
             MiningMode.FULL_SPEED -> {
-                tvMode.text = "【小菊模式】電源已連接\n全速運算中"
+                tvMode.text = "【小菊模式】電源連接全速運算"
                 tvMode.setTextColor(Color.parseColor("#FFA500"))
                 switchCatMode(true)
                 setMiningIntensity(true)
             }
             MiningMode.LOW_POWER -> {
-                tvMode.text = "【小月模式】電池供電中\n低功耗運算"
+                tvMode.text = "【小月模式】電池供電節能運算"
                 tvMode.setTextColor(Color.parseColor("#FFA500"))
                 switchCatMode(false)
                 setMiningIntensity(false)
@@ -275,7 +324,6 @@ class MainActivity : Activity() {
 
     private fun switchCatMode(isPluggedIn: Boolean) {
         catLottieView.cancelAnimation()
-        
         if (isPluggedIn) {
             catLottieView.setAnimation("orange_cat.json")
             catLottieView.scaleX = 1.2f 
@@ -287,10 +335,8 @@ class MainActivity : Activity() {
             catLottieView.scaleY = 0.85f
             catLottieView.speed = 0.6f   
         }
-        
         catLottieView.alpha = 0f
         catLottieView.playAnimation()
-        
         ObjectAnimator.ofFloat(catLottieView, "alpha", 0f, 1f).apply {
             duration = 600
             start()
@@ -333,7 +379,6 @@ class MainActivity : Activity() {
         }
     }
 
-    // 修改：同時監聽電源狀態與電池變化(包含溫度)
     private val systemReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
@@ -346,7 +391,6 @@ class MainActivity : Activity() {
                     updateMiningMode()
                 }
                 Intent.ACTION_BATTERY_CHANGED -> {
-                    // 電池溫度單位是 0.1 度，所以要除以 10
                     val tempInt = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0)
                     batteryTemp = tempInt / 10.0f
                     updateMiningMode()
@@ -359,11 +403,10 @@ class MainActivity : Activity() {
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_POWER_CONNECTED)
             addAction(Intent.ACTION_POWER_DISCONNECTED)
-            addAction(Intent.ACTION_BATTERY_CHANGED) // 註冊電池變更廣播抓溫度
+            addAction(Intent.ACTION_BATTERY_CHANGED) 
         }
         registerReceiver(systemReceiver, filter)
         
-        // 獲取初始狀態
         val batteryStatus: Intent? = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val status: Int = batteryStatus?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
         val tempInt: Int = batteryStatus?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0
@@ -371,7 +414,7 @@ class MainActivity : Activity() {
         isPluggedIn = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
         batteryTemp = tempInt / 10.0f
         
-        updateMiningMode() // 初始化 UI 狀態
+        updateMiningMode() 
         
         if (!isMining) {
             isMining = true
@@ -382,16 +425,5 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(systemReceiver)
-    }
-
-    fun updateMiningStatus(status: String, nonce: Int, hash: String) {
-        runOnUiThread {
-            if (nonce == 0 && hash.isEmpty()) {
-                tvMiningStatus.text = status
-            } else {
-                val shortHash = if (hash.length > 16) "${hash.take(8)}...${hash.takeLast(8)}" else hash
-                tvMiningStatus.text = "$status\nNonce: $nonce\nHash: $shortHash"
-            }
-        }
     }
 }
