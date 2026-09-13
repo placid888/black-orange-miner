@@ -15,7 +15,7 @@
 #include <vector>
 #include <atomic>
 #include <chrono>
-#include <mutex> // 新增：用於多執行緒鎖定
+#include <mutex>
 #include "sha256.h"
 
 #define LOG_TAG "ManekiMiner-Core"
@@ -34,7 +34,6 @@ std::atomic<bool> g_is_mining_running(false);
 std::atomic<int> g_current_sock(-1);
 std::atomic<int> g_accepted_shares(0);
 
-// --- 多執行緒共用狀態區 ---
 std::atomic<bool> g_has_valid_job(false);
 std::atomic<uint32_t> g_job_version(0);
 uint8_t g_shared_header[80];
@@ -46,13 +45,12 @@ std::string g_active_nbit_ui = "-";
 
 std::atomic<uint64_t> g_job_start_timestamp(0);
 std::atomic<long> g_prev_round_time_sec(0);
-std::atomic<uint64_t> g_total_hashes(0); // 匯總所有核心的算力
+std::atomic<uint64_t> g_total_hashes(0);
 
 std::mutex g_submit_mutex;
 std::mutex g_ui_mutex;
 std::string g_sample_hash = "";
 uint32_t g_sample_nonce = 0;
-// --------------------------
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     g_jvm = vm;
@@ -143,9 +141,6 @@ bool checkHashMeetsTarget(const uint8_t* hash, const uint8_t* target) {
     return true;
 }
 
-// ==========================================
-// 核心工作執行緒 (由多顆 CPU 核心並發執行)
-// ==========================================
 void minerWorker(int thread_id, int num_threads) {
     uint8_t local_header[80];
     uint8_t local_target[32];
@@ -153,7 +148,6 @@ void minerWorker(int thread_id, int num_threads) {
     uint32_t nonce = 0;
 
     while (g_is_mining_running) {
-        // 如果還沒有任務，休眠等待
         if (!g_has_valid_job) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
@@ -161,21 +155,17 @@ void minerWorker(int thread_id, int num_threads) {
 
         uint32_t current_version = g_job_version.load();
         
-        // 安全地複製已經準備好的 Header (76 bytes) 與難度目標
         {
             std::lock_guard<std::mutex> lock(g_submit_mutex);
             memcpy(local_header, g_shared_header, 80);
             memcpy(local_target, g_shared_target, 32);
         }
 
-        // 將 Nonce 起點根據執行緒 ID 錯開，避免核心之間重複運算相同的 Hash
         nonce = thread_id;
         uint64_t local_hashes = 0;
 
-        // 極致效能迴圈：只更換最後 4 bytes 的 Nonce
         while (g_is_mining_running && g_job_version.load() == current_version) {
             
-            // 油門控制 (如果拔掉電源，每個核心都會適度休眠)
             if (!g_is_full_speed) {
                 if (local_hashes % 500 == 0) std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
@@ -189,15 +179,12 @@ void minerWorker(int thread_id, int num_threads) {
             local_hashes++;
 
             if (checkHashMeetsTarget(hash_output, local_target)) {
-                // 🎉 找到區塊！
                 std::lock_guard<std::mutex> lock(g_submit_mutex);
                 g_accepted_shares++;
                 std::string success_hash = bytesToHexString(hash_output, 32);
                 
-                // 觸發中獎 UI
                 updateUI("🎯 找到區塊並提交中！", nonce, success_hash.c_str(), 0.0, g_accepted_shares.load(), 0, g_shared_job_id.c_str(), g_active_nbit_ui.c_str(), 0, 0); 
 
-                // 提交給礦池
                 char nonce_hex[9];
                 snprintf(nonce_hex, sizeof(nonce_hex), "%08x", nonce);
                 char submit_msg[512];
@@ -209,20 +196,17 @@ void minerWorker(int thread_id, int num_threads) {
                 if (sock >= 0) send(sock, submit_msg, strlen(submit_msg), 0);
             }
 
-            // UI 抽樣更新 (只讓 Thread 0 偶爾上報，避免拖慢效能)
-            if (thread_id == 0 && (local_hashes % 50000 == 0)) {
+            if (thread_id == 0 && (local_hashes == 4999)) {
                 std::lock_guard<std::mutex> lock(g_ui_mutex);
                 g_sample_hash = bytesToHexString(hash_output, 32);
                 g_sample_nonce = nonce;
             }
 
-            // 批次將算力上報給總計數器 (避免頻繁鎖定原子變數)
             if (local_hashes >= 5000) {
                 g_total_hashes += local_hashes;
                 local_hashes = 0;
             }
 
-            // Nonce 加上執行緒總數，保證所有核心網羅整個 40億 空間不重複
             nonce += num_threads;
         }
         
@@ -230,9 +214,6 @@ void minerWorker(int thread_id, int num_threads) {
     }
 }
 
-// ==========================================
-// 網路通訊與 UI 更新執行緒
-// ==========================================
 void networkLoop() {
     auto session_start_time = std::chrono::steady_clock::now();
     auto last_ui_update = std::chrono::steady_clock::now();
@@ -283,7 +264,6 @@ void networkLoop() {
         int current_extranonce2_size = 0;
         std::string local_current_job_id = "-";
 
-        // 監聽封包執行緒
         std::thread listener_thread([sock, &is_connected, &current_extranonce1, &current_extranonce2_size, &local_current_job_id]() {
             char rx_buffer[4096];
             while (is_connected && g_is_mining_running) {
@@ -310,7 +290,6 @@ void networkLoop() {
                     if (std::regex_search(payload, match, notify_regex) && match.size() >= 9) {
                         std::string new_job_id = match.str(1);
                         
-                        // 計時器邏輯
                         if (local_current_job_id != "-" && local_current_job_id != new_job_id) {
                             uint64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
                             uint64_t start_ms = g_job_start_timestamp.load();
@@ -321,7 +300,6 @@ void networkLoop() {
                         }
                         local_current_job_id = new_job_id;
 
-                        // 【效能解放】只在這裡預先算出一次 Merkle Root 跟 Header
                         std::stringstream en2_ss;
                         en2_ss << std::hex << std::setw(current_extranonce2_size * 2) << std::setfill('0') << 0;
                         std::string extranonce2 = en2_ss.str();
@@ -345,19 +323,18 @@ void networkLoop() {
 
                         uint8_t new_header[80];
                         memset(new_header, 0, sizeof(new_header));
-                        hexStringToBytes(match.str(6), new_header); // version
+                        hexStringToBytes(match.str(6), new_header); 
                         reverseBytes(new_header, 4);
-                        hexStringToBytes(match.str(2), new_header + 4); // prevhash
+                        hexStringToBytes(match.str(2), new_header + 4); 
                         memcpy(new_header + 36, merkle_root, 32);
-                        hexStringToBytes(match.str(8), new_header + 68); // ntime
+                        hexStringToBytes(match.str(8), new_header + 68); 
                         reverseBytes(new_header + 68, 4);
-                        hexStringToBytes(match.str(7), new_header + 72); // nbit
+                        hexStringToBytes(match.str(7), new_header + 72); 
                         reverseBytes(new_header + 72, 4);
                         
                         uint8_t new_target[32];
                         getTargetFromNbits(match.str(7), new_target);
 
-                        // 把熱騰騰的資料送給所有 Worker
                         {
                             std::lock_guard<std::mutex> lock(g_submit_mutex);
                             memcpy(g_shared_header, new_header, 80);
@@ -376,13 +353,12 @@ void networkLoop() {
         });
         listener_thread.detach();
 
-        // 獨立的 UI 更新迴圈 (每秒結算一次各核心匯總的算力)
         while (is_connected && g_is_mining_running) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
             
             auto now = std::chrono::steady_clock::now();
             double elapsed = std::chrono::duration<double>(now - last_ui_update).count();
-            uint64_t hashes = g_total_hashes.exchange(0); // 提取並歸零總算力
+            uint64_t hashes = g_total_hashes.exchange(0);
             double hashrate = hashes / elapsed;
             last_ui_update = now;
             
@@ -440,18 +416,14 @@ Java_com_manekiminer_app_MainActivity_startMiningNative(JNIEnv *env, jobject thi
     if (g_main_activity != nullptr) env->DeleteGlobalRef(g_main_activity);
     g_main_activity = env->NewGlobalRef(thiz);
     
-    // 只在第一次啟動時分配執行緒
     if (!g_is_mining_running.exchange(true)) {
-        // 啟動網路與 UI 執行緒
         std::thread netThread(networkLoop);
         netThread.detach();
 
-        // 偵測手機硬體核心數，喚醒所有沉睡的猛獸
         unsigned int num_cores = std::thread::hardware_concurrency();
-        if (num_cores == 0) num_cores = 4; // 防呆預設值
+        if (num_cores == 0) num_cores = 4;
         LOGI("啟動多核引擎，共分配 %d 個 CPU 核心！", num_cores);
 
-        // 分發任務給每一顆核心
         for (unsigned int i = 0; i < num_cores; ++i) {
             std::thread worker(minerWorker, i, num_cores);
             worker.detach();
