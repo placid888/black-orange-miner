@@ -11,6 +11,7 @@
 #include <cstring>
 #include <cstdio>
 #include <regex>
+#include <vector>
 #include "sha256.h"
 
 #define LOG_TAG "ManekiMiner-Core"
@@ -56,12 +57,24 @@ void double_sha256(const uint8_t* data, size_t len, uint8_t* hash_out) {
     sha256_final(&ctx, hash_out);
 }
 
+// 解析 JSON 陣列字串提取元素
+std::vector<std::string> extractArrayElements(const std::string& arrayStr) {
+    std::vector<std::string> elements;
+    std::regex str_regex(R"("([^"]+)")");
+    auto words_begin = std::sregex_iterator(arrayStr.begin(), arrayStr.end(), str_regex);
+    auto words_end = std::sregex_iterator();
+    for (std::sregex_iterator i = words_begin; i != words_end; ++i) {
+        elements.push_back(i->str(1));
+    }
+    return elements;
+}
+
 void startMiningLoop() {
     LOGI("小菊全速模式啟動：嘗試連線至 Solo 礦池 %s:%d", POOL_HOST, POOL_PORT);
 
     struct hostent *host = gethostbyname(POOL_HOST);
     if (host == nullptr) {
-        LOGE("DNS 解析失敗，請檢查網路連線狀態");
+        LOGE("DNS 解析失敗，檢查網路連線狀態");
         return;
     }
 
@@ -102,8 +115,9 @@ void startMiningLoop() {
     std::string current_coinb2 = "";
     std::string current_nbit = "";
     std::string current_ntime = "";
+    std::vector<std::string> current_merkle_branch;
 
-    std::thread listener_thread([sock, &current_extranonce1, &current_extranonce2_size, &current_job_id, &current_prevhash, &current_coinb1, &current_coinb2, &current_nbit, &current_ntime]() {
+    std::thread listener_thread([sock, &current_extranonce1, &current_extranonce2_size, &current_job_id, &current_prevhash, &current_coinb1, &current_coinb2, &current_nbit, &current_ntime, &current_merkle_branch]() {
         char rx_buffer[4096];
         while (true) {
             memset(rx_buffer, 0, sizeof(rx_buffer));
@@ -123,16 +137,20 @@ void startMiningLoop() {
             }
 
             if (payload.find("mining.notify") != std::string::npos) {
-                std::regex notify_regex(R"REGEX("params":\s*\[\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*\[[^\]]*\],\s*"([^"]+)",\s*"([^"]+)")REGEX");
+                // 調整正規表達式，提取包含 merkle_branch 陣列的原始字串
+                std::regex notify_regex(R"REGEX("params":\s*\[\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*\[(.*?)\]\s*,\s*"([^"]+)",\s*"([^"]+)")REGEX");
                 std::smatch match;
-                if (std::regex_search(payload, match, notify_regex) && match.size() >= 7) {
+                if (std::regex_search(payload, match, notify_regex) && match.size() >= 8) {
                     current_job_id = match.str(1);
                     current_prevhash = match.str(2);
                     current_coinb1 = match.str(3);
                     current_coinb2 = match.str(4);
-                    current_nbit = match.str(5);
-                    current_ntime = match.str(6);
-                    LOGI("【取得新任務】 Job ID: %s", current_job_id.c_str());
+                    std::string merkle_array_str = match.str(5);
+                    current_nbit = match.str(6);
+                    current_ntime = match.str(7);
+                    
+                    current_merkle_branch = extractArrayElements(merkle_array_str);
+                    LOGI("【取得新任務】 Job ID: %s, 梅克爾分支數量: %zu", current_job_id.c_str(), current_merkle_branch.size());
                 }
             }
         }
@@ -140,6 +158,7 @@ void startMiningLoop() {
     listener_thread.detach();
 
     uint32_t nonce = 0;
+    uint32_t extranonce2_val = 0;
     uint8_t hash_output[32];
 
     while (true) {
@@ -148,15 +167,26 @@ void startMiningLoop() {
             continue;
         }
 
+        // 格式化 extranonce2 (補零至指定長度，通常為 8 個 16 進位字元 = 4 bytes)
+        std::stringstream en2_ss;
+        en2_ss << std::hex << std::setw(current_extranonce2_size * 2) << std::setfill('0') << extranonce2_val;
+        std::string extranonce2 = en2_ss.str();
+
+        // 組合 Coinbase 交易字串
+        std::string coinbase_hex = current_coinb1 + current_extranonce1 + extranonce2 + current_coinb2;
+
         char header_buf[512];
         snprintf(header_buf, sizeof(header_buf), "%s-%u-%s", current_prevhash.c_str(), nonce, current_ntime.c_str());
-        
         double_sha256(reinterpret_cast<const uint8_t*>(header_buf), strlen(header_buf), hash_output);
 
         nonce++;
+        if (nonce == 0xFFFFFFFF) {
+            extranonce2_val++;
+            nonce = 0;
+        }
 
         if (nonce % 100000 == 0) {
-            LOGI("小菊運算中... 當前 Nonce: %u", nonce);
+            LOGI("小菊運算中... Nonce: %u, Coinbase: %s...", nonce, coinbase_hex.substr(0, 32).c_str());
         }
     }
 
@@ -167,7 +197,7 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_manekiminer_app_MainActivity_stringFromJNI(
         JNIEnv* env,
         jobject /* this */) {
-    std::string status = "小月與小菊引擎就緒。位元組轉換模組已掛載。";
+    std::string status = "引擎就緒。梅克爾與 Coinbase 模組掛載。";
     return env->NewStringUTF(status.c_str());
 }
 
