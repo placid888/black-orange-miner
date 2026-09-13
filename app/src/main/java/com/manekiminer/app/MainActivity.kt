@@ -5,10 +5,14 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Color
 import android.os.BatteryManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.TypedValue
+import android.view.Gravity
+import android.widget.LinearLayout
 import android.widget.TextView
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -42,15 +46,54 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        val layoutId = resources.getIdentifier("activity_main", "layout", packageName)
-        setContentView(layoutId)
 
-        tvTime = findViewById(resources.getIdentifier("tvTime", "id", packageName))
-        tvDate = findViewById(resources.getIdentifier("tvDate", "id", packageName))
-        tvWeather = findViewById(resources.getIdentifier("tvWeather", "id", packageName))
-        tvMode = findViewById(resources.getIdentifier("tvMode", "id", packageName))
-        tvMiningStatus = findViewById(resources.getIdentifier("tvMiningStatus", "id", packageName))
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setBackgroundColor(Color.BLACK)
+            setPadding(32, 32, 32, 32)
+        }
+
+        tvTime = TextView(this).apply {
+            setTextColor(Color.parseColor("#FFA500"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 56f)
+            gravity = Gravity.CENTER
+        }
+
+        tvDate = TextView(this).apply {
+            setTextColor(Color.parseColor("#FFA500"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            gravity = Gravity.CENTER
+            setPadding(0, 16, 0, 16)
+        }
+
+        tvWeather = TextView(this).apply {
+            setTextColor(Color.parseColor("#FFA500"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, 32)
+        }
+
+        tvMode = TextView(this).apply {
+            setTextColor(Color.parseColor("#FFA500"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            gravity = Gravity.CENTER
+        }
+
+        tvMiningStatus = TextView(this).apply {
+            setTextColor(Color.parseColor("#FFA500"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            gravity = Gravity.CENTER
+            setPadding(0, 8, 0, 0)
+        }
+
+        layout.addView(tvTime)
+        layout.addView(tvDate)
+        layout.addView(tvWeather)
+        layout.addView(tvMode)
+        layout.addView(tvMiningStatus)
+
+        setContentView(layout)
 
         tvMiningStatus.text = stringFromJNI()
 
