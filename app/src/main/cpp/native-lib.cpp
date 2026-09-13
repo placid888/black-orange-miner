@@ -30,6 +30,19 @@ std::string bytesToHexString(const uint8_t* bytes, size_t len) {
     return ss.str();
 }
 
+void hexStringToBytes(const std::string& hex, uint8_t* out) {
+    for (size_t i = 0; i < hex.length(); i += 2) {
+        std::string byteString = hex.substr(i, 2);
+        out[i/2] = (uint8_t) strtol(byteString.c_str(), nullptr, 16);
+    }
+}
+
+void reverseBytes(uint8_t* data, size_t len) {
+    for (size_t i = 0; i < len / 2; ++i) {
+        std::swap(data[i], data[len - 1 - i]);
+    }
+}
+
 void double_sha256(const uint8_t* data, size_t len, uint8_t* hash_out) {
     SHA256_CTX ctx;
     uint8_t first_hash[32];
@@ -80,7 +93,9 @@ void startMiningLoop() {
 
     LOGI("小菊完成授權，進入挖礦與任務監聽迴圈...");
 
-    char buffer[4096];
+    std::string current_extranonce1 = "";
+    int current_extranonce2_size = 0;
+    
     std::string current_job_id = "";
     std::string current_prevhash = "";
     std::string current_coinb1 = "";
@@ -88,9 +103,7 @@ void startMiningLoop() {
     std::string current_nbit = "";
     std::string current_ntime = "";
 
-    // 設定 Socket 為非阻塞或透過執行緒同步讀取
-    // 此處簡化架構：啟動獨立運算迴圈，背景同時監聽伺服器封包
-    std::thread listener_thread([sock, &current_job_id, &current_prevhash, &current_coinb1, &current_coinb2, &current_nbit, &current_ntime]() {
+    std::thread listener_thread([sock, &current_extranonce1, &current_extranonce2_size, &current_job_id, &current_prevhash, &current_coinb1, &current_coinb2, &current_nbit, &current_ntime]() {
         char rx_buffer[4096];
         while (true) {
             memset(rx_buffer, 0, sizeof(rx_buffer));
@@ -98,6 +111,17 @@ void startMiningLoop() {
             if (bytes_received <= 0) break;
 
             std::string payload(rx_buffer);
+            
+            if (payload.find("\"id\": 1") != std::string::npos || payload.find("\"id\":1") != std::string::npos) {
+                std::regex sub_regex(R"REGEX("result":\s*\[.*,\s*"([a-fA-F0-9]+)",\s*(\d+)\s*\])REGEX");
+                std::smatch match;
+                if (std::regex_search(payload, match, sub_regex) && match.size() >= 3) {
+                    current_extranonce1 = match.str(1);
+                    current_extranonce2_size = std::stoi(match.str(2));
+                    LOGI("【訂閱解析成功】 Extranonce1: %s, Size: %d", current_extranonce1.c_str(), current_extranonce2_size);
+                }
+            }
+
             if (payload.find("mining.notify") != std::string::npos) {
                 std::regex notify_regex(R"REGEX("params":\s*\[\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*\[[^\]]*\],\s*"([^"]+)",\s*"([^"]+)")REGEX");
                 std::smatch match;
@@ -115,17 +139,15 @@ void startMiningLoop() {
     });
     listener_thread.detach();
 
-    // 挖礦碰撞主迴圈
     uint32_t nonce = 0;
     uint8_t hash_output[32];
 
     while (true) {
-        if (current_prevhash.empty()) {
+        if (current_prevhash.empty() || current_extranonce1.empty()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
             continue;
         }
 
-        // 組合簡易區塊標頭進行雙重雜湊測試
         char header_buf[512];
         snprintf(header_buf, sizeof(header_buf), "%s-%u-%s", current_prevhash.c_str(), nonce, current_ntime.c_str());
         
@@ -145,7 +167,7 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_manekiminer_app_MainActivity_stringFromJNI(
         JNIEnv* env,
         jobject /* this */) {
-    std::string status = "小月與小菊引擎就緒。挖礦核心運算中。";
+    std::string status = "小月與小菊引擎就緒。位元組轉換模組已掛載。";
     return env->NewStringUTF(status.c_str());
 }
 
