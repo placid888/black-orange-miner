@@ -10,6 +10,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.BatteryManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -42,10 +43,9 @@ class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private var isMining = false
 
-    // JNI 介面宣告
     external fun stringFromJNI(): String
     external fun startMiningNative()
-    external fun setMiningIntensity(isFullSpeed: Boolean) // 新增：油門控制
+    external fun setMiningIntensity(isFullSpeed: Boolean)
 
     companion object {
         init {
@@ -56,13 +56,11 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // 1. 根佈局 (改為純黑底色，完美隱藏黑貓動畫方塊邊界)
         val rootLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#000000"))
         }
 
-        // 2. 頂部狀態列
         val topLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -92,7 +90,6 @@ class MainActivity : Activity() {
         topLayout.addView(tvDate)
         topLayout.addView(tvWeather)
 
-        // 3. 中央動畫舞台
         val animationContainer = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
@@ -113,7 +110,6 @@ class MainActivity : Activity() {
         }
         animationContainer.addView(catLottieView)
 
-        // 4. 底部數據卡片
         val bottomCardLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -158,6 +154,14 @@ class MainActivity : Activity() {
 
         setContentView(rootLayout)
         tvMiningStatus.text = stringFromJNI()
+
+        // 新增：啟動背景防護服務
+        val serviceIntent = Intent(this, MiningService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
 
         startClock()
         fetchWeather()

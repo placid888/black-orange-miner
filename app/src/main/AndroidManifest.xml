@@ -2,7 +2,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="com.manekiminer.app">
 
+    <!-- 網路權限 (API 請求與礦池連線) -->
     <uses-permission android:name="android.permission.INTERNET" />
+    
+    <!-- 新增：背景服務與喚醒鎖定權限 (避免螢幕關閉時被休眠) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application
         android:allowBackup="true"
@@ -12,13 +17,14 @@
         
         <activity
             android:name=".MainActivity"
-            android:exported="true"
-            android:screenOrientation="landscape">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-    </application>
 
+        <!-- 新增：註冊挖礦前景服務 -->
+        <service android:name=".MiningService" android:exported="false" />
+    </application>
 </manifest>
