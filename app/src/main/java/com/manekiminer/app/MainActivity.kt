@@ -84,8 +84,7 @@ class MainActivity : Activity() {
     private fun fetchWeatherData() {
         thread {
             try {
-                // Open-Meteo 免費氣象 API (座標預設：新竹縣)
-                val url = URL("[https://api.open-meteo.com/v1/forecast?latitude=24.90&longitude=121.04&current_weather=true](https://api.open-meteo.com/v1/forecast?latitude=24.90&longitude=121.04&current_weather=true)")
+                val url = URL("https://api.open-meteo.com/v1/forecast?latitude=24.90&longitude=121.04&current_weather=true")
                 val connection = url.openConnection() as HttpURLConnection
                 connection.requestMethod = "GET"
                 connection.connectTimeout = 5000
@@ -119,9 +118,9 @@ class MainActivity : Activity() {
                 val isCharging = status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL
                 
                 if (isCharging) {
-                    statusView.text = "【橘貓模式】電源已連接，允許全速運算\n${stringFromJNI()}"
+                    statusView.text = "【小菊模式】電源已連接，允許全速運算\n${stringFromJNI()}"
                 } else {
-                    statusView.text = "【黑貓模式】待機監視中，暫停運算\n${stringFromJNI()}"
+                    statusView.text = "【小月模式】待機監視中，暫停運算\n${stringFromJNI()}"
                 }
             }
         }
