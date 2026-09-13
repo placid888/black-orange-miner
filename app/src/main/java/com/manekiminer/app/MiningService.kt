@@ -13,10 +13,26 @@ import android.os.PowerManager
 class MiningService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
 
+    // 宣告一個常數，讓外部可以呼叫關閉
+    companion object {
+        const val ACTION_STOP_SERVICE = "STOP_MINING_SERVICE"
+    }
+
     override fun onCreate() {
         super.onCreate()
         acquireWakeLock()
         startForegroundService()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 接收到退出指令時，自我了斷
+        if (intent?.action == ACTION_STOP_SERVICE) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+        
+        // START_STICKY：如果被系統因記憶體不足而殺死，系統會嘗試重新啟動服務
+        return START_STICKY 
     }
 
     private fun startForegroundService() {
@@ -54,16 +70,27 @@ class MiningService : Service() {
             PowerManager.PARTIAL_WAKE_LOCK,
             "ManekiMiner::BackgroundWakeLock"
         )
-        wakeLock?.acquire() 
+        // 加上一個超時保護 (例如 24 小時 = 24 * 60 * 60 * 1000L)，防止極端崩潰死鎖
+        wakeLock?.acquire(86400000L) 
     }
 
     override fun onDestroy() {
-        super.onDestroy()
+        // 1. 釋放 WakeLock
         wakeLock?.let {
             if (it.isHeld) {
                 it.release()
             }
         }
+        
+        // 2. 徹底移除狀態列通知
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            @Suppress("DEPRECATION")
+            stopForeground(true)
+        }
+
+        super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? {

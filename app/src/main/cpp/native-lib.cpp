@@ -28,8 +28,12 @@ const char* WALLET_ADDRESS = "bc1qvn2rhjw553l2ttplyqpt2kaepd32dh5q6kfac9";
 JavaVM* g_jvm = nullptr;
 jobject g_main_activity = nullptr;
 
-// 新增：油門狀態全域變數，預設為全速
+// 油門狀態全域變數，預設為全速
 std::atomic<bool> g_is_full_speed(true);
+
+// 新增：退出機制全域變數
+std::atomic<bool> g_is_mining_running(false);
+std::atomic<int> g_current_sock(-1); // 紀錄當前 Socket，用於強制中斷 recv 阻塞
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     g_jvm = vm;
@@ -126,7 +130,8 @@ bool checkHashMeetsTarget(const uint8_t* hash, const uint8_t* target) {
 void startMiningLoop() {
     updateUI("引擎啟動中，準備連線...", 0, "");
     
-    while (true) {
+    // 將原本的 while(true) 改為受控迴圈
+    while (g_is_mining_running) {
         LOGI("連線至 Solo 礦池 %s:%d", POOL_HOST, POOL_PORT);
 
         struct hostent *host = gethostbyname(POOL_HOST);
@@ -142,6 +147,8 @@ void startMiningLoop() {
             std::this_thread::sleep_for(std::chrono::seconds(5));
             continue;
         }
+        
+        g_current_sock = sock; // 紀錄當前 socket，方便從外部 shutdown
 
         struct sockaddr_in server_addr;
         memset(&server_addr, 0, sizeof(server_addr));
@@ -152,6 +159,7 @@ void startMiningLoop() {
         if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
             updateUI("礦池伺服器連線失敗", 0, "");
             close(sock);
+            g_current_sock = -1;
             std::this_thread::sleep_for(std::chrono::seconds(5));
             continue;
         }
@@ -181,9 +189,10 @@ void startMiningLoop() {
         uint8_t target_difficulty[32];
         memset(target_difficulty, 0, 32);
 
+        // 監聽執行緒也加入 g_is_mining_running 判斷
         std::thread listener_thread([sock, &is_connected, &current_extranonce1, &current_extranonce2_size, &current_job_id, &current_prevhash, &current_coinb1, &current_coinb2, &current_version, &current_nbit, &current_ntime, &current_merkle_branch, &target_difficulty]() {
             char rx_buffer[4096];
-            while (is_connected) {
+            while (is_connected && g_is_mining_running) {
                 memset(rx_buffer, 0, sizeof(rx_buffer));
                 int bytes_received = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);
                 if (bytes_received <= 0) {
@@ -227,15 +236,15 @@ void startMiningLoop() {
         uint32_t extranonce2_val = 0;
         uint8_t hash_output[32];
 
-        while (is_connected) {
+        // 挖礦核心迴圈加入 g_is_mining_running 判斷
+        while (is_connected && g_is_mining_running) {
             if (current_prevhash.empty() || current_extranonce1.empty() || current_version.empty()) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 continue;
             }
 
-            // 新增：油門控制邏輯 (Throttling)
+            // 油門控制邏輯 (Throttling)
             if (!g_is_full_speed) {
-                // 低功耗模式：每 1000 次運算強制休眠 10 毫秒，釋放逾 90% CPU 資源並防止過熱
                 if (nonce % 1000 == 0) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 }
@@ -310,7 +319,6 @@ void startMiningLoop() {
 
             if (nonce % 100000 == 0) {
                 std::string block_hash_hex = bytesToHexString(hash_output, 32);
-                // 根據全域變數動態更新 UI 文字
                 if (g_is_full_speed) {
                     updateUI("全速運算中", nonce, block_hash_hex.c_str());
                 } else {
@@ -319,9 +327,18 @@ void startMiningLoop() {
             }
         }
 
-        updateUI("連線中斷，準備重新連線", 0, "");
-        close(sock);
-        std::this_thread::sleep_for(std::chrono::seconds(5));
+        // 迴圈結束清理資源
+        int current_sock = g_current_sock.exchange(-1);
+        if (current_sock >= 0) {
+            close(current_sock);
+        }
+
+        if (g_is_mining_running) {
+            updateUI("連線中斷，準備重新連線", 0, "");
+            std::this_thread::sleep_for(std::chrono::seconds(5));
+        } else {
+            updateUI("挖礦引擎已安全關閉", 0, "");
+        }
     }
 }
 
@@ -340,11 +357,11 @@ Java_com_manekiminer_app_MainActivity_startMiningNative(JNIEnv *env, jobject thi
     }
     g_main_activity = env->NewGlobalRef(thiz);
     
+    g_is_mining_running = true;
     std::thread minerThread(startMiningLoop);
     minerThread.detach();
 }
 
-// 新增：JNI 油門控制接收器
 extern "C" JNIEXPORT void JNICALL
 Java_com_manekiminer_app_MainActivity_setMiningIntensity(JNIEnv *env, jobject thiz, jboolean is_full_speed) {
     g_is_full_speed = is_full_speed;
@@ -352,5 +369,21 @@ Java_com_manekiminer_app_MainActivity_setMiningIntensity(JNIEnv *env, jobject th
         LOGI("引擎控制：切換至全速運算模式");
     } else {
         LOGI("引擎控制：切換至低功耗運算模式");
+    }
+}
+
+// 新增：停止挖礦引擎與連線
+extern "C" JNIEXPORT void JNICALL
+Java_com_manekiminer_app_MainActivity_stopMiningNative(JNIEnv *env, jobject thiz) {
+    LOGI("引擎控制：接收到停止訊號，準備安全退出");
+    
+    // 1. 打破運算迴圈與外層重新連線迴圈
+    g_is_mining_running = false;
+    
+    // 2. 強制中斷 Socket 阻塞狀態，讓 recv() 瞬間解開
+    int sock = g_current_sock.exchange(-1);
+    if (sock >= 0) {
+        shutdown(sock, SHUT_RDWR);
+        close(sock);
     }
 }
