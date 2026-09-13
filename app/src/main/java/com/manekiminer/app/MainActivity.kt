@@ -10,8 +10,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.widget.TextView
-import androidx.annotation.Keep
-import com.manekiminer.app.R
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -46,11 +44,11 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        tvTime = findViewById(R.id.tvTime)
-        tvDate = findViewById(R.id.tvDate)
-        tvWeather = findViewById(R.id.tvWeather)
-        tvMode = findViewById(R.id.tvMode)
-        tvMiningStatus = findViewById(R.id.tvMiningStatus)
+        tvTime = findViewById<TextView>(R.id.tvTime)
+        tvDate = findViewById<TextView>(R.id.tvDate)
+        tvWeather = findViewById<TextView>(R.id.tvWeather)
+        tvMode = findViewById<TextView>(R.id.tvMode)
+        tvMiningStatus = findViewById<TextView>(R.id.tvMiningStatus)
 
         tvMiningStatus.text = stringFromJNI()
 
@@ -148,7 +146,6 @@ class MainActivity : Activity() {
         unregisterReceiver(powerReceiver)
     }
 
-    @Keep
     fun updateMiningStatus(status: String, nonce: Int, hash: String) {
         runOnUiThread {
             if (nonce == 0 && hash.isEmpty()) {
