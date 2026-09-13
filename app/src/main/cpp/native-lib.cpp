@@ -38,16 +38,16 @@ extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     return JNI_VERSION_1_6;
 }
 
-// 升級：JNI 簽名大幅擴展，加入 uptime, job_id, difficulty
-void updateUI(const char* status, uint32_t nonce, const char* hash, double hashrate, int shares, long uptime, const char* job_id, const char* difficulty) {
+// 升級：JNI 簽名加入 round_time (目前耗時) 與 prev_round_time (上輪耗時)
+void updateUI(const char* status, uint32_t nonce, const char* hash, double hashrate, int shares, long uptime, const char* job_id, const char* difficulty, long round_time, long prev_round_time) {
     if (g_jvm == nullptr || g_main_activity == nullptr) return;
 
     JNIEnv* env;
     if (g_jvm->AttachCurrentThread(&env, nullptr) != JNI_OK) return;
 
     jclass clazz = env->GetObjectClass(g_main_activity);
-    // 簽名：String, Int, String, Double, Int, Long, String, String
-    jmethodID methodID = env->GetMethodID(clazz, "updateMiningStatus", "(Ljava/lang/String;ILjava/lang/String;DIJLjava/lang/String;Ljava/lang/String;)V");
+    // 簽名：String, Int, String, Double, Int, Long, String, String, Long, Long
+    jmethodID methodID = env->GetMethodID(clazz, "updateMiningStatus", "(Ljava/lang/String;ILjava/lang/String;DIJLjava/lang/String;Ljava/lang/String;JJ)V");
 
     if (methodID != nullptr) {
         jstring jStatus = env->NewStringUTF(status);
@@ -55,7 +55,7 @@ void updateUI(const char* status, uint32_t nonce, const char* hash, double hashr
         jstring jJobId = env->NewStringUTF(job_id);
         jstring jDifficulty = env->NewStringUTF(difficulty);
         
-        env->CallVoidMethod(g_main_activity, methodID, jStatus, nonce, jHash, hashrate, shares, (jlong)uptime, jJobId, jDifficulty);
+        env->CallVoidMethod(g_main_activity, methodID, jStatus, nonce, jHash, hashrate, shares, (jlong)uptime, jJobId, jDifficulty, (jlong)round_time, (jlong)prev_round_time);
         
         env->DeleteLocalRef(jStatus);
         env->DeleteLocalRef(jHash);
@@ -131,24 +131,26 @@ bool checkHashMeetsTarget(const uint8_t* hash, const uint8_t* target) {
 }
 
 void startMiningLoop() {
-    // 記錄挖礦全生命週期的啟動時間
     auto session_start_time = std::chrono::steady_clock::now();
     
-    updateUI("🟡 引擎啟動中，準備連線...", 0, "", 0.0, g_accepted_shares.load(), 0, "-", "-");
+    std::atomic<uint64_t> job_start_timestamp(0);
+    std::atomic<long> prev_round_time_sec(0);
+
+    updateUI("🟡 引擎啟動中，準備連線...", 0, "", 0.0, g_accepted_shares.load(), 0, "-", "-", 0, 0);
     
     while (g_is_mining_running) {
         long uptime_sec = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - session_start_time).count();
         
         struct hostent *host = gethostbyname(POOL_HOST);
         if (host == nullptr) {
-            updateUI("🔴 DNS 解析失敗，等待重試", 0, "", 0.0, g_accepted_shares.load(), uptime_sec, "-", "-");
+            updateUI("🔴 DNS 解析失敗，等待重試", 0, "", 0.0, g_accepted_shares.load(), uptime_sec, "-", "-", 0, 0);
             std::this_thread::sleep_for(std::chrono::seconds(5));
             continue;
         }
 
         int sock = socket(AF_INET, SOCK_STREAM, 0);
         if (sock < 0) {
-            updateUI("🔴 Socket 建立失敗", 0, "", 0.0, g_accepted_shares.load(), uptime_sec, "-", "-");
+            updateUI("🔴 Socket 建立失敗", 0, "", 0.0, g_accepted_shares.load(), uptime_sec, "-", "-", 0, 0);
             std::this_thread::sleep_for(std::chrono::seconds(5));
             continue;
         }
@@ -161,14 +163,14 @@ void startMiningLoop() {
         memcpy(&server_addr.sin_addr.s_addr, host->h_addr, host->h_length);
 
         if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-            updateUI("🔴 礦池伺服器連線失敗", 0, "", 0.0, g_accepted_shares.load(), uptime_sec, "-", "-");
+            updateUI("🔴 礦池伺服器連線失敗", 0, "", 0.0, g_accepted_shares.load(), uptime_sec, "-", "-", 0, 0);
             close(sock);
             g_current_sock = -1;
             std::this_thread::sleep_for(std::chrono::seconds(5));
             continue;
         }
         
-        updateUI("🟢 成功連線，等待任務分配...", 0, "", 0.0, g_accepted_shares.load(), uptime_sec, "-", "-");
+        updateUI("🟢 成功連線，等待任務分配...", 0, "", 0.0, g_accepted_shares.load(), uptime_sec, "-", "-", 0, 0);
 
         const char* subscribe_msg = "{\"id\": 1, \"method\": \"mining.subscribe\", \"params\": [\"ManekiMiner/1.0\"]}\n";
         send(sock, subscribe_msg, strlen(subscribe_msg), 0);
@@ -193,7 +195,7 @@ void startMiningLoop() {
         uint8_t target_difficulty[32];
         memset(target_difficulty, 0, 32);
 
-        std::thread listener_thread([sock, &is_connected, &current_extranonce1, &current_extranonce2_size, &current_job_id, &current_prevhash, &current_coinb1, &current_coinb2, &current_version, &current_nbit, &current_ntime, &current_merkle_branch, &target_difficulty]() {
+        std::thread listener_thread([sock, &is_connected, &current_extranonce1, &current_extranonce2_size, &current_job_id, &current_prevhash, &current_coinb1, &current_coinb2, &current_version, &current_nbit, &current_ntime, &current_merkle_branch, &target_difficulty, &job_start_timestamp, &prev_round_time_sec]() {
             char rx_buffer[4096];
             while (is_connected && g_is_mining_running) {
                 memset(rx_buffer, 0, sizeof(rx_buffer));
@@ -215,7 +217,21 @@ void startMiningLoop() {
                     std::regex notify_regex(R"REGEX("params":\s*\[\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*\[(.*?)\]\s*,\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)")REGEX");
                     std::smatch match;
                     if (std::regex_search(payload, match, notify_regex) && match.size() >= 9) {
-                        current_job_id = match.str(1);
+                        std::string new_job_id = match.str(1);
+                        
+                        // 計算上一輪花費的時間
+                        if (current_job_id != "-" && current_job_id != new_job_id) {
+                            uint64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+                            uint64_t start_ms = job_start_timestamp.load();
+                            if (start_ms > 0) {
+                                prev_round_time_sec = (now_ms - start_ms) / 1000;
+                            }
+                            job_start_timestamp = now_ms; // 重新計時
+                        } else if (current_job_id == "-") {
+                            job_start_timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+                        }
+
+                        current_job_id = new_job_id;
                         current_prevhash = match.str(2);
                         current_coinb1 = match.str(3);
                         current_coinb2 = match.str(4);
@@ -286,9 +302,15 @@ void startMiningLoop() {
 
             if (checkHashMeetsTarget(hash_output, target_difficulty)) {
                 g_accepted_shares++;
+                
+                uint64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+                uint64_t start_ms = job_start_timestamp.load();
+                long current_round_sec = (start_ms > 0) ? (now_ms - start_ms) / 1000 : 0;
+                long prev_sec = prev_round_time_sec.load();
+
                 uptime_sec = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - session_start_time).count();
                 std::string success_hash = bytesToHexString(hash_output, 32);
-                updateUI("🎯 找到區塊並提交中！", nonce, success_hash.c_str(), 0.0, g_accepted_shares.load(), uptime_sec, current_job_id.c_str(), current_nbit.c_str());
+                updateUI("🎯 找到區塊並提交中！", nonce, success_hash.c_str(), 0.0, g_accepted_shares.load(), uptime_sec, current_job_id.c_str(), current_nbit.c_str(), current_round_sec, prev_sec);
                 
                 char nonce_hex[9];
                 snprintf(nonce_hex, sizeof(nonce_hex), "%08x", nonce);
@@ -313,10 +335,15 @@ void startMiningLoop() {
                     double hashrate = hashes_since_last / elapsed.count();
                     std::string block_hash_hex = bytesToHexString(hash_output, 32);
                     
+                    uint64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+                    uint64_t start_ms = job_start_timestamp.load();
+                    long current_round_sec = (start_ms > 0) ? (now_ms - start_ms) / 1000 : 0;
+                    long prev_sec = prev_round_time_sec.load();
+
                     if (g_is_full_speed) {
-                        updateUI("🟢 運算中", nonce, block_hash_hex.c_str(), hashrate, g_accepted_shares.load(), uptime_sec, current_job_id.c_str(), current_nbit.c_str());
+                        updateUI("🟢 運算中", nonce, block_hash_hex.c_str(), hashrate, g_accepted_shares.load(), uptime_sec, current_job_id.c_str(), current_nbit.c_str(), current_round_sec, prev_sec);
                     } else {
-                        updateUI("🟡 節能運算中", nonce, block_hash_hex.c_str(), hashrate, g_accepted_shares.load(), uptime_sec, current_job_id.c_str(), current_nbit.c_str());
+                        updateUI("🟡 節能運算中", nonce, block_hash_hex.c_str(), hashrate, g_accepted_shares.load(), uptime_sec, current_job_id.c_str(), current_nbit.c_str(), current_round_sec, prev_sec);
                     }
                     
                     last_time = now;
@@ -330,10 +357,10 @@ void startMiningLoop() {
 
         uptime_sec = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - session_start_time).count();
         if (g_is_mining_running) {
-            updateUI("🔴 連線中斷，準備重新連線", 0, "", 0.0, g_accepted_shares.load(), uptime_sec, "-", "-");
+            updateUI("🔴 連線中斷，準備重新連線", 0, "", 0.0, g_accepted_shares.load(), uptime_sec, "-", "-", 0, 0);
             std::this_thread::sleep_for(std::chrono::seconds(5));
         } else {
-            updateUI("⚪ 挖礦引擎已安全關閉", 0, "", 0.0, g_accepted_shares.load(), uptime_sec, "-", "-");
+            updateUI("⚪ 挖礦引擎已安全關閉", 0, "", 0.0, g_accepted_shares.load(), uptime_sec, "-", "-", 0, 0);
         }
     }
 }

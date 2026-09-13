@@ -48,6 +48,8 @@ class MainActivity : Activity() {
     private lateinit var valHashrate: TextView
     private lateinit var valJobId: TextView
     private lateinit var valDifficulty: TextView
+    private lateinit var valRoundTime: TextView     // 新增：本輪耗時
+    private lateinit var valPrevRoundTime: TextView // 新增：上輪耗時
     private lateinit var valShares: TextView
     private lateinit var valHash: TextView
     private lateinit var valNonce: TextView
@@ -159,11 +161,14 @@ class MainActivity : Activity() {
         }
         bottomCardLayout.addView(tvMode)
 
+        // 動態生成 10 欄專業儀表板清單 (重新排序增加易讀性)
         valStatus = createDashboardRow(bottomCardLayout, "節點狀態", "#00E676")
         valUptime = createDashboardRow(bottomCardLayout, "運行時間", "#E0E0E0")
         valHashrate = createDashboardRow(bottomCardLayout, "即時算力", "#00B0FF")
         valJobId = createDashboardRow(bottomCardLayout, "當前任務", "#FF9800")
         valDifficulty = createDashboardRow(bottomCardLayout, "區塊難度", "#00BCD4")
+        valRoundTime = createDashboardRow(bottomCardLayout, "本輪耗時", "#FF4081")     // 粉紅色高亮顯示計時器
+        valPrevRoundTime = createDashboardRow(bottomCardLayout, "上輪耗時", "#757575") // 灰色顯示歷史數據
         valShares = createDashboardRow(bottomCardLayout, "有效提交", "#FFD600")
         valNonce = createDashboardRow(bottomCardLayout, "隨機雜湊", "#B388FF")
         valHash = createDashboardRow(bottomCardLayout, "當前運算", "#9E9E9E")
@@ -267,7 +272,6 @@ class MainActivity : Activity() {
 
             addView(TextView(context).apply {
                 text = "🎉 JACKPOT! 貓咪發威啦! 🎉\n成功找到有效區塊！"
-                // 修正：從 textSize = 改為 setTextSize()
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f)
                 setTextColor(Color.parseColor("#B71C1C"))
                 typeface = Typeface.DEFAULT_BOLD
@@ -277,7 +281,6 @@ class MainActivity : Activity() {
 
             addView(TextView(context).apply {
                 text = String.format("神聖 Nonce: 0x%08X", winningNonce)
-                // 修正：從 textSize = 改為 setTextSize()
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
                 setTextColor(Color.BLACK)
                 typeface = Typeface.MONOSPACE
@@ -286,7 +289,6 @@ class MainActivity : Activity() {
 
             addView(TextView(context).apply {
                 text = "Winning Hash:\n$winningHash"
-                // 修正：從 textSize = 改為 setTextSize()
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
                 setTextColor(Color.parseColor("#333333"))
                 typeface = Typeface.MONOSPACE
@@ -304,7 +306,8 @@ class MainActivity : Activity() {
             .show()
     }
 
-    fun updateMiningStatus(status: String, nonce: Int, hash: String, hashrate: Double, shares: Int, uptime: Long, jobId: String, difficulty: String) {
+    // 升級：對接 C++ 的全新資料流，加入 roundTime 與 prevRoundTime
+    fun updateMiningStatus(status: String, nonce: Int, hash: String, hashrate: Double, shares: Int, uptime: Long, jobId: String, difficulty: String, roundTime: Long, prevRoundTime: Long) {
         runOnUiThread {
             valStatus.text = status
             
@@ -321,6 +324,15 @@ class MainActivity : Activity() {
 
             if (jobId != "-") valJobId.text = jobId
             if (difficulty != "-") valDifficulty.text = "0x$difficulty"
+
+            // 時間格式化工具函數 (轉為 MM:SS)
+            val formatTime = { timeSec: Long ->
+                if (timeSec == 0L) "-"
+                else String.format(Locale.US, "%02d:%02d", timeSec / 60, timeSec % 60)
+            }
+            
+            valRoundTime.text = formatTime(roundTime)
+            valPrevRoundTime.text = formatTime(prevRoundTime)
 
             valHashrate.text = when {
                 hashrate >= 1_000_000 -> String.format(Locale.US, "%.2f MH/s", hashrate / 1_000_000)
