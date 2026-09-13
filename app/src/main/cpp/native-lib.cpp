@@ -69,7 +69,6 @@ std::vector<std::string> extractArrayElements(const std::string& arrayStr) {
     return elements;
 }
 
-// 將 nbits 十六進位字串轉換為 32 位元組的目標難度 (大端序 Big-Endian)
 void getTargetFromNbits(const std::string& nbits_hex, uint8_t* target) {
     memset(target, 0, 32);
     uint32_t bits = strtoul(nbits_hex.c_str(), nullptr, 16);
@@ -83,10 +82,9 @@ void getTargetFromNbits(const std::string& nbits_hex, uint8_t* target) {
     }
 }
 
-// 檢查計算出的雜湊值 (小端序) 是否小於等於目標難度 (大端序)
 bool checkHashMeetsTarget(const uint8_t* hash, const uint8_t* target) {
     for (int i = 0; i < 32; ++i) {
-        uint8_t hash_byte = hash[31 - i]; // 將小端序雜湊值倒序讀取與大端序目標比對
+        uint8_t hash_byte = hash[31 - i];
         if (hash_byte > target[i]) return false;
         if (hash_byte < target[i]) return true;
     }
@@ -244,13 +242,22 @@ void startMiningLoop() {
 
         double_sha256(block_header, 80, hash_output);
 
-        // 進行目標難度比對
         if (checkHashMeetsTarget(hash_output, target_difficulty)) {
             std::string success_hash = bytesToHexString(hash_output, 32);
             LOGI("★★★★★【碰撞成功】★★★★★ 找到符合難度的區塊！");
             LOGI("Hash: %s", success_hash.c_str());
             LOGI("Nonce: %u, Extranonce2: %s", nonce, extranonce2.c_str());
-            // 待實作：傳送 mining.submit 指令
+            
+            char nonce_hex[9];
+            snprintf(nonce_hex, sizeof(nonce_hex), "%08x", nonce);
+
+            char submit_msg[512];
+            snprintf(submit_msg, sizeof(submit_msg), 
+                     "{\"id\": 4, \"method\": \"mining.submit\", \"params\": [\"%s\", \"%s\", \"%s\", \"%s\", \"%s\"]}\n", 
+                     WALLET_ADDRESS, current_job_id.c_str(), extranonce2.c_str(), current_ntime.c_str(), nonce_hex);
+            
+            send(sock, submit_msg, strlen(submit_msg), 0);
+            LOGI("已發送 mining.submit 指令：\n%s", submit_msg);
         }
 
         nonce++;
@@ -272,7 +279,7 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_manekiminer_app_MainActivity_stringFromJNI(
         JNIEnv* env,
         jobject /* this */) {
-    std::string status = "引擎就緒。難度比對模組已掛載。";
+    std::string status = "引擎就緒。任務提交模組已掛載。";
     return env->NewStringUTF(status.c_str());
 }
 
