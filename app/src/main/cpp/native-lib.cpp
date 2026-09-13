@@ -175,6 +175,10 @@ void minerWorker(int thread_id, int num_threads) {
             memcpy(local_target, g_shared_target, 32);
         }
 
+        SHA256_CTX midstate;
+        sha256_init(&midstate);
+        sha256_update(&midstate, local_header, 64);
+
         nonce = thread_id;
         uint64_t local_hashes = 0;
 
@@ -189,7 +193,16 @@ void minerWorker(int thread_id, int num_threads) {
             local_header[78] = (nonce >> 16) & 0xFF;
             local_header[79] = (nonce >> 24) & 0xFF;
 
-            double_sha256(local_header, 80, hash_output);
+            SHA256_CTX ctx1 = midstate;
+            sha256_update(&ctx1, local_header + 64, 16);
+            uint8_t first_hash[32];
+            sha256_final(&ctx1, first_hash);
+
+            SHA256_CTX ctx2;
+            sha256_init(&ctx2);
+            sha256_update(&ctx2, first_hash, 32);
+            sha256_final(&ctx2, hash_output);
+
             local_hashes++;
 
             if (checkHashMeetsTarget(hash_output, local_target)) {
