@@ -237,11 +237,8 @@ class MainActivity : Activity() {
         return tvValue
     }
 
-    // 更新：中大獎黃金彈出視窗 + 播放專屬音效
     private fun showJackpotDialog(winningNonce: Int, winningHash: String) {
-        // 1. 觸發音效播放 (播完自動釋放記憶體)
         try {
-            // 先找 jackpot_sound，找不到就 fallback 到你剛放的 background_sound
             var resourceId = resources.getIdentifier("jackpot_sound", "raw", packageName)
             if (resourceId == 0) {
                 resourceId = resources.getIdentifier("background_sound", "raw", packageName)
@@ -250,7 +247,7 @@ class MainActivity : Activity() {
             if (resourceId != 0) {
                 val mp = MediaPlayer.create(this, resourceId)
                 mp.setOnCompletionListener { 
-                    it.release() // 音效播完立刻回收，不佔資源
+                    it.release() 
                 }
                 mp.start()
             }
@@ -258,7 +255,6 @@ class MainActivity : Activity() {
             e.printStackTrace()
         }
 
-        // 2. 顯示黃金視窗
         val dialogView = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -271,7 +267,8 @@ class MainActivity : Activity() {
 
             addView(TextView(context).apply {
                 text = "🎉 JACKPOT! 貓咪發威啦! 🎉\n成功找到有效區塊！"
-                textSize = TypedValue.COMPLEX_UNIT_SP, 24f
+                // 修正：從 textSize = 改為 setTextSize()
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f)
                 setTextColor(Color.parseColor("#B71C1C"))
                 typeface = Typeface.DEFAULT_BOLD
                 gravity = Gravity.CENTER
@@ -280,7 +277,8 @@ class MainActivity : Activity() {
 
             addView(TextView(context).apply {
                 text = String.format("神聖 Nonce: 0x%08X", winningNonce)
-                textSize = TypedValue.COMPLEX_UNIT_SP, 16f
+                // 修正：從 textSize = 改為 setTextSize()
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
                 setTextColor(Color.BLACK)
                 typeface = Typeface.MONOSPACE
                 gravity = Gravity.CENTER
@@ -288,7 +286,8 @@ class MainActivity : Activity() {
 
             addView(TextView(context).apply {
                 text = "Winning Hash:\n$winningHash"
-                textSize = TypedValue.COMPLEX_UNIT_SP, 12f
+                // 修正：從 textSize = 改為 setTextSize()
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
                 setTextColor(Color.parseColor("#333333"))
                 typeface = Typeface.MONOSPACE
                 gravity = Gravity.CENTER
