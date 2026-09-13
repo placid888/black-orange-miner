@@ -5,9 +5,12 @@
     <!-- 網路權限 (API 請求與礦池連線) -->
     <uses-permission android:name="android.permission.INTERNET" />
     
-    <!-- 新增：背景服務與喚醒鎖定權限 (避免螢幕關閉時被休眠) -->
+    <!-- 背景服務與喚醒鎖定權限 (避免螢幕關閉時被休眠) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    
+    <!-- 新增：Android 14 (API 34) 要求的特定前景服務類型權限 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <application
         android:allowBackup="true"
@@ -24,7 +27,10 @@
             </intent-filter>
         </activity>
 
-        <!-- 新增：註冊挖礦前景服務 -->
-        <service android:name=".MiningService" android:exported="false" />
+        <!-- 修改：加上 android:foregroundServiceType="dataSync" 解決閃退 -->
+        <service 
+            android:name=".MiningService" 
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>
