@@ -89,11 +89,9 @@ void startMiningLoop() {
         if (bytes_received > 0) {
             std::string payload(buffer);
             
-            // 判斷是否為新區塊任務封包
             if (payload.find("mining.notify") != std::string::npos) {
-                // 使用正則表達式提取 params 陣列中的前四個字串參數
-                // 格式對應: ["job_id", "prevhash", "coinb1", "coinb2", ...
-                std::regex notify_regex(R"("params":\s*\[\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)")");
+                // 加入 REGEX 邊界標記以避免 )" 提早閉合
+                std::regex notify_regex(R"REGEX("params":\s*\[\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)")REGEX");
                 std::smatch match;
                 
                 if (std::regex_search(payload, match, notify_regex) && match.size() >= 5) {
@@ -108,9 +106,8 @@ void startMiningLoop() {
                     LOGE("任務解析失敗，封包格式不符或參數缺失");
                 }
             } 
-            // 判斷是否為難度調整封包
             else if (payload.find("mining.set_difficulty") != std::string::npos) {
-                std::regex diff_regex(R"("params":\s*\[\s*([0-9.]+)\s*\])");
+                std::regex diff_regex(R"REGEX("params":\s*\[\s*([0-9.]+)\s*\])REGEX");
                 std::smatch match;
                 
                 if (std::regex_search(payload, match, diff_regex) && match.size() >= 2) {
