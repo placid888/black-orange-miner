@@ -13,16 +13,21 @@ import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextClock
 import android.widget.TextView
+import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.net.HttpURLConnection
+import java.net.URL
+import kotlin.concurrent.thread
 
 class MainActivity : Activity() {
 
     private lateinit var statusView: TextView
+    private lateinit var weatherView: TextView
     private lateinit var powerReceiver: BroadcastReceiver
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // 保持螢幕常亮
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         val mainLayout = LinearLayout(this).apply {
@@ -37,7 +42,7 @@ class MainActivity : Activity() {
             setTextColor(Color.parseColor("#FFA500"))
             textSize = 80f
             gravity = Gravity.CENTER
-            setPadding(0, 0, 0, 40)
+            setPadding(0, 0, 0, 20)
         }
 
         val dateClock = TextClock(this).apply {
@@ -46,7 +51,15 @@ class MainActivity : Activity() {
             setTextColor(Color.parseColor("#FFA500"))
             textSize = 24f
             gravity = Gravity.CENTER
-            setPadding(0, 0, 0, 80)
+            setPadding(0, 0, 0, 20)
+        }
+
+        weatherView = TextView(this).apply {
+            text = "氣象資料載入中..."
+            setTextColor(Color.parseColor("#FFA500"))
+            textSize = 24f
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, 60)
         }
 
         statusView = TextView(this).apply {
@@ -54,19 +67,49 @@ class MainActivity : Activity() {
             setTextColor(Color.parseColor("#CC8400"))
             textSize = 18f
             gravity = Gravity.CENTER
-            setPadding(0, 0, 0, 0)
         }
 
         mainLayout.addView(textClock)
         mainLayout.addView(dateClock)
+        mainLayout.addView(weatherView)
         mainLayout.addView(statusView)
 
         setContentView(mainLayout)
         
         setupPowerReceiver()
-        
-        // 觸發 C++ 背景挖礦測試
+        fetchWeatherData()
         startMiningNative()
+    }
+
+    private fun fetchWeatherData() {
+        thread {
+            try {
+                // Open-Meteo 免費氣象 API (座標預設：新竹縣)
+                val url = URL("[https://api.open-meteo.com/v1/forecast?latitude=24.90&longitude=121.04&current_weather=true](https://api.open-meteo.com/v1/forecast?latitude=24.90&longitude=121.04&current_weather=true)")
+                val connection = url.openConnection() as HttpURLConnection
+                connection.requestMethod = "GET"
+                connection.connectTimeout = 5000
+                
+                if (connection.responseCode == HttpURLConnection.HTTP_OK) {
+                    val reader = BufferedReader(InputStreamReader(connection.inputStream))
+                    val response = reader.readText()
+                    reader.close()
+                    
+                    val jsonObject = JSONObject(response)
+                    val currentWeather = jsonObject.getJSONObject("current_weather")
+                    val temp = currentWeather.getDouble("temperature")
+                    val windSpeed = currentWeather.getDouble("windspeed")
+                    
+                    runOnUiThread {
+                        weatherView.text = "氣溫: $temp°C | 風速: $windSpeed km/h"
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    weatherView.text = "氣象資料更新失敗"
+                }
+            }
+        }
     }
 
     private fun setupPowerReceiver() {
@@ -90,7 +133,6 @@ class MainActivity : Activity() {
         unregisterReceiver(powerReceiver)
     }
 
-    // 確保這裡只有單一宣告
     external fun stringFromJNI(): String
     external fun startMiningNative()
 
