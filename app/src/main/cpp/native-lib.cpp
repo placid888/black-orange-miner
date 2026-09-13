@@ -14,6 +14,7 @@
 #include <regex>
 #include <vector>
 #include <atomic>
+#include <chrono>
 #include "sha256.h"
 
 #define LOG_TAG "ManekiMiner-Core"
@@ -26,6 +27,9 @@ const char* WALLET_ADDRESS = "bc1qvn2rhjw553l2ttplyqpt2kaepd32dh5q6kfac9";
 
 JavaVM* g_jvm = nullptr;
 jobject g_main_activity = nullptr;
+
+// 新增：油門狀態全域變數，預設為全速
+std::atomic<bool> g_is_full_speed(true);
 
 extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     g_jvm = vm;
@@ -123,7 +127,7 @@ void startMiningLoop() {
     updateUI("引擎啟動中，準備連線...", 0, "");
     
     while (true) {
-        LOGI("小菊全速模式啟動：嘗試連線至 Solo 礦池 %s:%d", POOL_HOST, POOL_PORT);
+        LOGI("連線至 Solo 礦池 %s:%d", POOL_HOST, POOL_PORT);
 
         struct hostent *host = gethostbyname(POOL_HOST);
         if (host == nullptr) {
@@ -229,6 +233,14 @@ void startMiningLoop() {
                 continue;
             }
 
+            // 新增：油門控制邏輯 (Throttling)
+            if (!g_is_full_speed) {
+                // 低功耗模式：每 1000 次運算強制休眠 10 毫秒，釋放逾 90% CPU 資源並防止過熱
+                if (nonce % 1000 == 0) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+            }
+
             std::stringstream en2_ss;
             en2_ss << std::hex << std::setw(current_extranonce2_size * 2) << std::setfill('0') << extranonce2_val;
             std::string extranonce2 = en2_ss.str();
@@ -298,7 +310,12 @@ void startMiningLoop() {
 
             if (nonce % 100000 == 0) {
                 std::string block_hash_hex = bytesToHexString(hash_output, 32);
-                updateUI("全速運算中", nonce, block_hash_hex.c_str());
+                // 根據全域變數動態更新 UI 文字
+                if (g_is_full_speed) {
+                    updateUI("全速運算中", nonce, block_hash_hex.c_str());
+                } else {
+                    updateUI("低功耗運算中", nonce, block_hash_hex.c_str());
+                }
             }
         }
 
@@ -325,4 +342,15 @@ Java_com_manekiminer_app_MainActivity_startMiningNative(JNIEnv *env, jobject thi
     
     std::thread minerThread(startMiningLoop);
     minerThread.detach();
+}
+
+// 新增：JNI 油門控制接收器
+extern "C" JNIEXPORT void JNICALL
+Java_com_manekiminer_app_MainActivity_setMiningIntensity(JNIEnv *env, jobject thiz, jboolean is_full_speed) {
+    g_is_full_speed = is_full_speed;
+    if (is_full_speed) {
+        LOGI("引擎控制：切換至全速運算模式");
+    } else {
+        LOGI("引擎控制：切換至低功耗運算模式");
+    }
 }
