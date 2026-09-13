@@ -138,7 +138,6 @@ void startMiningLoop() {
             }
 
             if (payload.find("mining.notify") != std::string::npos) {
-                // 修正正則表達式，完整提取包含 version 在內的所有尾端參數
                 std::regex notify_regex(R"REGEX("params":\s*\[\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*\[(.*?)\]\s*,\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)")REGEX");
                 std::smatch match;
                 if (std::regex_search(payload, match, notify_regex) && match.size() >= 9) {
@@ -152,7 +151,7 @@ void startMiningLoop() {
                     current_ntime = match.str(8);
                     
                     current_merkle_branch = extractArrayElements(merkle_array_str);
-                    LOGI("【取得新任務】 Job ID: %s, 梅克爾分支數量: %zu", current_job_id.c_str(), current_merkle_branch.size());
+                    LOGI("【取得新任務】 Job ID: %s", current_job_id.c_str());
                 }
             }
         }
@@ -164,7 +163,7 @@ void startMiningLoop() {
     uint8_t hash_output[32];
 
     while (true) {
-        if (current_prevhash.empty() || current_extranonce1.empty()) {
+        if (current_prevhash.empty() || current_extranonce1.empty() || current_version.empty()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
             continue;
         }
@@ -175,16 +174,13 @@ void startMiningLoop() {
 
         std::string coinbase_hex = current_coinb1 + current_extranonce1 + extranonce2 + current_coinb2;
         
-        // 1. 將 Coinbase 十六進位字串轉為二進位陣列
         size_t coinbase_len = coinbase_hex.length() / 2;
         uint8_t coinbase_bytes[1024]; 
         hexStringToBytes(coinbase_hex, coinbase_bytes);
 
-        // 2. 對 Coinbase 進行雙重 SHA-256，取得梅克爾樹初始葉節點 (Coinbase Hash)
         uint8_t merkle_root[32];
         double_sha256(coinbase_bytes, coinbase_len, merkle_root);
 
-        // 3. 遍歷梅克爾分支陣列，逐一拼接並進行雜湊
         for (const std::string& branch_hex : current_merkle_branch) {
             uint8_t branch_bytes[32];
             hexStringToBytes(branch_hex, branch_bytes);
@@ -196,6 +192,37 @@ void startMiningLoop() {
             double_sha256(concat, 64, merkle_root);
         }
 
+        // 組合 80 位元組區塊標頭 (Block Header)
+        uint8_t block_header[80];
+        memset(block_header, 0, sizeof(block_header));
+
+        // 1. Version (4 bytes) - 轉為 Little-Endian
+        hexStringToBytes(current_version, block_header);
+        reverseBytes(block_header, 4);
+
+        // 2. Prevhash (32 bytes)
+        hexStringToBytes(current_prevhash, block_header + 4);
+
+        // 3. Merkle Root (32 bytes)
+        memcpy(block_header + 36, merkle_root, 32);
+
+        // 4. nTime (4 bytes) - 轉為 Little-Endian
+        hexStringToBytes(current_ntime, block_header + 68);
+        reverseBytes(block_header + 68, 4);
+
+        // 5. nBits (4 bytes) - 轉為 Little-Endian
+        hexStringToBytes(current_nbit, block_header + 72);
+        reverseBytes(block_header + 72, 4);
+
+        // 6. Nonce (4 bytes) - 以 Little-Endian 寫入遞增變數
+        block_header[76] = (nonce >> 0) & 0xFF;
+        block_header[77] = (nonce >> 8) & 0xFF;
+        block_header[78] = (nonce >> 16) & 0xFF;
+        block_header[79] = (nonce >> 24) & 0xFF;
+
+        // 進行最終雙重 SHA-256 運算
+        double_sha256(block_header, 80, hash_output);
+
         nonce++;
         if (nonce == 0xFFFFFFFF) {
             extranonce2_val++;
@@ -203,8 +230,8 @@ void startMiningLoop() {
         }
 
         if (nonce % 100000 == 0) {
-            std::string merkle_root_hex = bytesToHexString(merkle_root, 32);
-            LOGI("小菊運算中... Nonce: %u, Merkle Root: %s", nonce, merkle_root_hex.c_str());
+            std::string block_hash_hex = bytesToHexString(hash_output, 32);
+            LOGI("小菊運算中... Nonce: %u, 區塊雜湊: %s", nonce, block_hash_hex.c_str());
         }
     }
 
@@ -215,7 +242,7 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_manekiminer_app_MainActivity_stringFromJNI(
         JNIEnv* env,
         jobject /* this */) {
-    std::string status = "引擎就緒。梅克爾根計算模組掛載。";
+    std::string status = "引擎就緒。80 Byte 區塊標頭組合模組掛載。";
     return env->NewStringUTF(status.c_str());
 }
 
