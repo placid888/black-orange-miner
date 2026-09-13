@@ -60,7 +60,8 @@ void double_sha256(const uint8_t* data, size_t len, uint8_t* hash_out) {
 // 解析 JSON 陣列字串提取元素
 std::vector<std::string> extractArrayElements(const std::string& arrayStr) {
     std::vector<std::string> elements;
-    std::regex str_regex(R"("([^"]+)")");
+    // 加入 REGEX 邊界標記修正編譯錯誤
+    std::regex str_regex(R"REGEX("([^"]+)")REGEX");
     auto words_begin = std::sregex_iterator(arrayStr.begin(), arrayStr.end(), str_regex);
     auto words_end = std::sregex_iterator();
     for (std::sregex_iterator i = words_begin; i != words_end; ++i) {
@@ -137,7 +138,6 @@ void startMiningLoop() {
             }
 
             if (payload.find("mining.notify") != std::string::npos) {
-                // 調整正規表達式，提取包含 merkle_branch 陣列的原始字串
                 std::regex notify_regex(R"REGEX("params":\s*\[\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*\[(.*?)\]\s*,\s*"([^"]+)",\s*"([^"]+)")REGEX");
                 std::smatch match;
                 if (std::regex_search(payload, match, notify_regex) && match.size() >= 8) {
@@ -167,12 +167,10 @@ void startMiningLoop() {
             continue;
         }
 
-        // 格式化 extranonce2 (補零至指定長度，通常為 8 個 16 進位字元 = 4 bytes)
         std::stringstream en2_ss;
         en2_ss << std::hex << std::setw(current_extranonce2_size * 2) << std::setfill('0') << extranonce2_val;
         std::string extranonce2 = en2_ss.str();
 
-        // 組合 Coinbase 交易字串
         std::string coinbase_hex = current_coinb1 + current_extranonce1 + extranonce2 + current_coinb2;
 
         char header_buf[512];
