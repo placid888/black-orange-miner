@@ -69,6 +69,30 @@ std::vector<std::string> extractArrayElements(const std::string& arrayStr) {
     return elements;
 }
 
+// 將 nbits 十六進位字串轉換為 32 位元組的目標難度 (大端序 Big-Endian)
+void getTargetFromNbits(const std::string& nbits_hex, uint8_t* target) {
+    memset(target, 0, 32);
+    uint32_t bits = strtoul(nbits_hex.c_str(), nullptr, 16);
+    uint8_t shift = (bits >> 24) & 0xFF;
+    uint32_t mantissa = bits & 0x00FFFFFF;
+
+    if (shift <= 32 && shift >= 3) {
+        target[32 - shift] = (mantissa >> 16) & 0xFF;
+        target[32 - shift + 1] = (mantissa >> 8) & 0xFF;
+        target[32 - shift + 2] = mantissa & 0xFF;
+    }
+}
+
+// 檢查計算出的雜湊值 (小端序) 是否小於等於目標難度 (大端序)
+bool checkHashMeetsTarget(const uint8_t* hash, const uint8_t* target) {
+    for (int i = 0; i < 32; ++i) {
+        uint8_t hash_byte = hash[31 - i]; // 將小端序雜湊值倒序讀取與大端序目標比對
+        if (hash_byte > target[i]) return false;
+        if (hash_byte < target[i]) return true;
+    }
+    return true;
+}
+
 void startMiningLoop() {
     LOGI("小菊全速模式啟動：嘗試連線至 Solo 礦池 %s:%d", POOL_HOST, POOL_PORT);
 
@@ -117,8 +141,11 @@ void startMiningLoop() {
     std::string current_nbit = "";
     std::string current_ntime = "";
     std::vector<std::string> current_merkle_branch;
+    
+    uint8_t target_difficulty[32];
+    memset(target_difficulty, 0, 32);
 
-    std::thread listener_thread([sock, &current_extranonce1, &current_extranonce2_size, &current_job_id, &current_prevhash, &current_coinb1, &current_coinb2, &current_version, &current_nbit, &current_ntime, &current_merkle_branch]() {
+    std::thread listener_thread([sock, &current_extranonce1, &current_extranonce2_size, &current_job_id, &current_prevhash, &current_coinb1, &current_coinb2, &current_version, &current_nbit, &current_ntime, &current_merkle_branch, &target_difficulty]() {
         char rx_buffer[4096];
         while (true) {
             memset(rx_buffer, 0, sizeof(rx_buffer));
@@ -151,7 +178,9 @@ void startMiningLoop() {
                     current_ntime = match.str(8);
                     
                     current_merkle_branch = extractArrayElements(merkle_array_str);
-                    LOGI("【取得新任務】 Job ID: %s", current_job_id.c_str());
+                    getTargetFromNbits(current_nbit, target_difficulty);
+                    
+                    LOGI("【取得新任務】 Job ID: %s, 目標難度已更新", current_job_id.c_str());
                 }
             }
         }
@@ -192,36 +221,37 @@ void startMiningLoop() {
             double_sha256(concat, 64, merkle_root);
         }
 
-        // 組合 80 位元組區塊標頭 (Block Header)
         uint8_t block_header[80];
         memset(block_header, 0, sizeof(block_header));
 
-        // 1. Version (4 bytes) - 轉為 Little-Endian
         hexStringToBytes(current_version, block_header);
         reverseBytes(block_header, 4);
 
-        // 2. Prevhash (32 bytes)
         hexStringToBytes(current_prevhash, block_header + 4);
 
-        // 3. Merkle Root (32 bytes)
         memcpy(block_header + 36, merkle_root, 32);
 
-        // 4. nTime (4 bytes) - 轉為 Little-Endian
         hexStringToBytes(current_ntime, block_header + 68);
         reverseBytes(block_header + 68, 4);
 
-        // 5. nBits (4 bytes) - 轉為 Little-Endian
         hexStringToBytes(current_nbit, block_header + 72);
         reverseBytes(block_header + 72, 4);
 
-        // 6. Nonce (4 bytes) - 以 Little-Endian 寫入遞增變數
         block_header[76] = (nonce >> 0) & 0xFF;
         block_header[77] = (nonce >> 8) & 0xFF;
         block_header[78] = (nonce >> 16) & 0xFF;
         block_header[79] = (nonce >> 24) & 0xFF;
 
-        // 進行最終雙重 SHA-256 運算
         double_sha256(block_header, 80, hash_output);
+
+        // 進行目標難度比對
+        if (checkHashMeetsTarget(hash_output, target_difficulty)) {
+            std::string success_hash = bytesToHexString(hash_output, 32);
+            LOGI("★★★★★【碰撞成功】★★★★★ 找到符合難度的區塊！");
+            LOGI("Hash: %s", success_hash.c_str());
+            LOGI("Nonce: %u, Extranonce2: %s", nonce, extranonce2.c_str());
+            // 待實作：傳送 mining.submit 指令
+        }
 
         nonce++;
         if (nonce == 0xFFFFFFFF) {
@@ -242,7 +272,7 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_manekiminer_app_MainActivity_stringFromJNI(
         JNIEnv* env,
         jobject /* this */) {
-    std::string status = "引擎就緒。80 Byte 區塊標頭組合模組掛載。";
+    std::string status = "引擎就緒。難度比對模組已掛載。";
     return env->NewStringUTF(status.c_str());
 }
 
