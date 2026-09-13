@@ -22,8 +22,35 @@
 
 const char* POOL_HOST = "solo.ckpool.org";
 const int POOL_PORT = 3333;
-
 const char* WALLET_ADDRESS = "bc1qvn2rhjw553l2ttplyqpt2kaepd32dh5q6kfac9";
+
+JavaVM* g_jvm = nullptr;
+jobject g_main_activity = nullptr;
+
+extern "C" JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
+    g_jvm = vm;
+    return JNI_VERSION_1_6;
+}
+
+void updateUI(const char* status, uint32_t nonce, const char* hash) {
+    if (g_jvm == nullptr || g_main_activity == nullptr) return;
+
+    JNIEnv* env;
+    if (g_jvm->AttachCurrentThread(&env, nullptr) != JNI_OK) return;
+
+    jclass clazz = env->GetObjectClass(g_main_activity);
+    jmethodID methodID = env->GetMethodID(clazz, "updateMiningStatus", "(Ljava/lang/String;ILjava/lang/String;)V");
+
+    if (methodID != nullptr) {
+        jstring jStatus = env->NewStringUTF(status);
+        jstring jHash = env->NewStringUTF(hash);
+        env->CallVoidMethod(g_main_activity, methodID, jStatus, nonce, jHash);
+        env->DeleteLocalRef(jStatus);
+        env->DeleteLocalRef(jHash);
+    }
+    
+    g_jvm->DetachCurrentThread();
+}
 
 std::string bytesToHexString(const uint8_t* bytes, size_t len) {
     std::stringstream ss;
@@ -93,20 +120,21 @@ bool checkHashMeetsTarget(const uint8_t* hash, const uint8_t* target) {
 }
 
 void startMiningLoop() {
-    // 外層加入無限迴圈，提供斷線自動重連機制
+    updateUI("引擎啟動中，準備連線...", 0, "");
+    
     while (true) {
         LOGI("小菊全速模式啟動：嘗試連線至 Solo 礦池 %s:%d", POOL_HOST, POOL_PORT);
 
         struct hostent *host = gethostbyname(POOL_HOST);
         if (host == nullptr) {
-            LOGE("DNS 解析失敗，等待 5 秒後重試...");
+            updateUI("DNS 解析失敗，等待重試", 0, "");
             std::this_thread::sleep_for(std::chrono::seconds(5));
             continue;
         }
 
         int sock = socket(AF_INET, SOCK_STREAM, 0);
         if (sock < 0) {
-            LOGE("Socket 建立失敗，等待 5 秒後重試...");
+            updateUI("Socket 建立失敗", 0, "");
             std::this_thread::sleep_for(std::chrono::seconds(5));
             continue;
         }
@@ -118,12 +146,13 @@ void startMiningLoop() {
         memcpy(&server_addr.sin_addr.s_addr, host->h_addr, host->h_length);
 
         if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-            LOGE("連線至礦池伺服器失敗，等待 5 秒後重試...");
+            updateUI("礦池伺服器連線失敗", 0, "");
             close(sock);
             std::this_thread::sleep_for(std::chrono::seconds(5));
             continue;
         }
-        LOGI("成功連線至礦池伺服器！");
+        
+        updateUI("成功連線至礦池", 0, "");
 
         const char* subscribe_msg = "{\"id\": 1, \"method\": \"mining.subscribe\", \"params\": [\"ManekiMiner/1.0\"]}\n";
         send(sock, subscribe_msg, strlen(subscribe_msg), 0);
@@ -132,9 +161,6 @@ void startMiningLoop() {
         snprintf(authorize_msg, sizeof(authorize_msg), "{\"id\": 2, \"method\": \"mining.authorize\", \"params\": [\"%s\", \"x\"]}\n", WALLET_ADDRESS);
         send(sock, authorize_msg, strlen(authorize_msg), 0);
 
-        LOGI("小菊完成授權，進入挖礦與任務監聽迴圈...");
-
-        // 設立連線狀態原子變數，確保監聽執行緒與挖礦執行緒同步中斷
         std::atomic<bool> is_connected(true);
         std::string current_extranonce1 = "";
         int current_extranonce2_size = 0;
@@ -157,7 +183,6 @@ void startMiningLoop() {
                 memset(rx_buffer, 0, sizeof(rx_buffer));
                 int bytes_received = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);
                 if (bytes_received <= 0) {
-                    LOGE("與礦池伺服器斷線，準備重新啟動引擎");
                     is_connected = false;
                     break;
                 }
@@ -170,7 +195,6 @@ void startMiningLoop() {
                     if (std::regex_search(payload, match, sub_regex) && match.size() >= 3) {
                         current_extranonce1 = match.str(1);
                         current_extranonce2_size = std::stoi(match.str(2));
-                        LOGI("【訂閱解析成功】 Extranonce1: %s, Size: %d", current_extranonce1.c_str(), current_extranonce2_size);
                     }
                 }
 
@@ -199,7 +223,6 @@ void startMiningLoop() {
         uint32_t extranonce2_val = 0;
         uint8_t hash_output[32];
 
-        // 挖礦迴圈將在斷線時一併退出
         while (is_connected) {
             if (current_prevhash.empty() || current_extranonce1.empty() || current_version.empty()) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -237,7 +260,6 @@ void startMiningLoop() {
             reverseBytes(block_header, 4);
 
             hexStringToBytes(current_prevhash, block_header + 4);
-
             memcpy(block_header + 36, merkle_root, 32);
 
             hexStringToBytes(current_ntime, block_header + 68);
@@ -255,9 +277,7 @@ void startMiningLoop() {
 
             if (checkHashMeetsTarget(hash_output, target_difficulty)) {
                 std::string success_hash = bytesToHexString(hash_output, 32);
-                LOGI("★★★★★【碰撞成功】★★★★★ 找到符合難度的區塊！");
-                LOGI("Hash: %s", success_hash.c_str());
-                LOGI("Nonce: %u, Extranonce2: %s", nonce, extranonce2.c_str());
+                updateUI("找到區塊並提交中！", nonce, success_hash.c_str());
                 
                 char nonce_hex[9];
                 snprintf(nonce_hex, sizeof(nonce_hex), "%08x", nonce);
@@ -268,7 +288,6 @@ void startMiningLoop() {
                          WALLET_ADDRESS, current_job_id.c_str(), extranonce2.c_str(), current_ntime.c_str(), nonce_hex);
                 
                 send(sock, submit_msg, strlen(submit_msg), 0);
-                LOGI("已發送 mining.submit 指令：\n%s", submit_msg);
             }
 
             nonce++;
@@ -279,13 +298,12 @@ void startMiningLoop() {
 
             if (nonce % 100000 == 0) {
                 std::string block_hash_hex = bytesToHexString(hash_output, 32);
-                LOGI("小菊運算中... Nonce: %u, 區塊雜湊: %s", nonce, block_hash_hex.c_str());
+                updateUI("全速運算中", nonce, block_hash_hex.c_str());
             }
         }
 
-        // 關閉 Socket 資源，等待 5 秒後重啟連線
+        updateUI("連線中斷，準備重新連線", 0, "");
         close(sock);
-        LOGI("清理連線資源，準備重新連線...");
         std::this_thread::sleep_for(std::chrono::seconds(5));
     }
 }
@@ -294,12 +312,17 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_manekiminer_app_MainActivity_stringFromJNI(
         JNIEnv* env,
         jobject /* this */) {
-    std::string status = "引擎就緒。斷線重連機制已掛載。";
+    std::string status = "引擎就緒。UI 回呼機制已掛載。";
     return env->NewStringUTF(status.c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_manekiminer_app_MainActivity_startMiningNative(JNIEnv *env, jobject thiz) {
+    if (g_main_activity != nullptr) {
+        env->DeleteGlobalRef(g_main_activity);
+    }
+    g_main_activity = env->NewGlobalRef(thiz);
+    
     std::thread minerThread(startMiningLoop);
     minerThread.detach();
 }
