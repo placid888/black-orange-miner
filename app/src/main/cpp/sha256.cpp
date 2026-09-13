@@ -1,9 +1,12 @@
 #include "sha256.h"
 #include <string.h>
 
+#if defined(__ARM_FEATURE_CRYPTO)
+#include <arm_neon.h>
+#endif
+
 #define ROTLEFT(a,b) (((a) << (b)) | ((a) >> (32-(b))))
 #define ROTRIGHT(a,b) (((a) >> (b)) | ((a) << (32-(b))))
-
 #define CH(x,y,z) (((x) & (y)) ^ (~(x) & (z)))
 #define MAJ(x,y,z) (((x) & (y)) ^ ((x) & (z)) ^ ((y) & (z)))
 #define EP0(x) (ROTRIGHT(x,2) ^ ROTRIGHT(x,13) ^ ROTRIGHT(x,22))
@@ -22,7 +25,57 @@ static const uint32_t k[64] = {
     0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
 };
 
+#if defined(__ARM_FEATURE_CRYPTO)
+// ARMv8 硬體加速實作
+static void sha256_transform_neon(SHA256_CTX *ctx, const uint8_t data[]) {
+    uint32x4_t state0 = vld1q_u32(&ctx->state[0]); 
+    uint32x4_t state1 = vld1q_u32(&ctx->state[4]); 
+
+    // 載入區塊資料並反轉位元組 (Big-Endian 轉換)
+    uint32x4_t msg0 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(data)));
+    uint32x4_t msg1 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(data + 16)));
+    uint32x4_t msg2 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(data + 32)));
+    uint32x4_t msg3 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(data + 48)));
+
+    uint32x4_t tmp;
+
+    // 定義硬體運算巨集，呼叫 CPU 的專用加密電路
+    #define SHA256_ROUND(w_val, k_idx) \
+        tmp = state0; \
+        state0 = vsha256hq_u32(state0, state1, vaddq_u32(w_val, vld1q_u32(&k[k_idx]))); \
+        state1 = vsha256h2q_u32(state1, tmp, vaddq_u32(w_val, vld1q_u32(&k[k_idx])));
+
+    #define SHA256_MSG_UPDATE(w0, w1, w2, w3) \
+        vsha256su1q_u32(vsha256su0q_u32(w0, w1), w2, w3)
+
+    SHA256_ROUND(msg0, 0);
+    SHA256_ROUND(msg1, 4);
+    SHA256_ROUND(msg2, 8);
+    SHA256_ROUND(msg3, 12);
+
+    for (int i = 16; i < 64; i += 16) {
+        msg0 = SHA256_MSG_UPDATE(msg0, msg1, msg2, msg3);
+        SHA256_ROUND(msg0, i);
+        msg1 = SHA256_MSG_UPDATE(msg1, msg2, msg3, msg0);
+        SHA256_ROUND(msg1, i + 4);
+        msg2 = SHA256_MSG_UPDATE(msg2, msg3, msg0, msg1);
+        SHA256_ROUND(msg2, i + 8);
+        msg3 = SHA256_MSG_UPDATE(msg3, msg0, msg1, msg2);
+        SHA256_ROUND(msg3, i + 12);
+    }
+
+    uint32x4_t orig0 = vld1q_u32(&ctx->state[0]);
+    uint32x4_t orig1 = vld1q_u32(&ctx->state[4]);
+    vst1q_u32(&ctx->state[0], vaddq_u32(orig0, state0));
+    vst1q_u32(&ctx->state[4], vaddq_u32(orig1, state1));
+}
+#endif
+
 static void sha256_transform(SHA256_CTX *ctx, const uint8_t data[]) {
+#if defined(__ARM_FEATURE_CRYPTO)
+    sha256_transform_neon(ctx, data);
+#else
+    // 若不支援硬體加速，退回軟體迴圈運算
     uint32_t a, b, c, d, e, f, g, h, i, j, t1, t2, m[64];
     for (i = 0, j = 0; i < 16; ++i, j += 4)
         m[i] = (data[j] << 24) | (data[j + 1] << 16) | (data[j + 2] << 8) | (data[j + 3]);
@@ -38,6 +91,7 @@ static void sha256_transform(SHA256_CTX *ctx, const uint8_t data[]) {
     }
     ctx->state[0] += a; ctx->state[1] += b; ctx->state[2] += c; ctx->state[3] += d;
     ctx->state[4] += e; ctx->state[5] += f; ctx->state[6] += g; ctx->state[7] += h;
+#endif
 }
 
 void sha256_init(SHA256_CTX *ctx) {
