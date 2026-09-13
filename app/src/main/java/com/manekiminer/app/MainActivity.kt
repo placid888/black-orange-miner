@@ -57,7 +57,7 @@ class MainActivity : Activity() {
         // 1. 根佈局 (深灰底色)
         val rootLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#121212")) // 較柔和的深灰色
+            setBackgroundColor(Color.parseColor("#000000")) // 較柔和的深灰色
         }
 
         // 2. 頂部狀態列
