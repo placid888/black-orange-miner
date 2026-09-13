@@ -10,6 +10,7 @@
 #include <sstream>
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
 #include <regex>
 #include <vector>
 #include "sha256.h"
@@ -34,7 +35,7 @@ std::string bytesToHexString(const uint8_t* bytes, size_t len) {
 void hexStringToBytes(const std::string& hex, uint8_t* out) {
     for (size_t i = 0; i < hex.length(); i += 2) {
         std::string byteString = hex.substr(i, 2);
-        out[i/2] = (uint8_t) strtol(byteString.c_str(), nullptr, 16);
+        out[i/2] = (uint8_t) strtoul(byteString.c_str(), nullptr, 16);
     }
 }
 
@@ -57,10 +58,8 @@ void double_sha256(const uint8_t* data, size_t len, uint8_t* hash_out) {
     sha256_final(&ctx, hash_out);
 }
 
-// 解析 JSON 陣列字串提取元素
 std::vector<std::string> extractArrayElements(const std::string& arrayStr) {
     std::vector<std::string> elements;
-    // 加入 REGEX 邊界標記修正編譯錯誤
     std::regex str_regex(R"REGEX("([^"]+)")REGEX");
     auto words_begin = std::sregex_iterator(arrayStr.begin(), arrayStr.end(), str_regex);
     auto words_end = std::sregex_iterator();
@@ -114,11 +113,12 @@ void startMiningLoop() {
     std::string current_prevhash = "";
     std::string current_coinb1 = "";
     std::string current_coinb2 = "";
+    std::string current_version = "";
     std::string current_nbit = "";
     std::string current_ntime = "";
     std::vector<std::string> current_merkle_branch;
 
-    std::thread listener_thread([sock, &current_extranonce1, &current_extranonce2_size, &current_job_id, &current_prevhash, &current_coinb1, &current_coinb2, &current_nbit, &current_ntime, &current_merkle_branch]() {
+    std::thread listener_thread([sock, &current_extranonce1, &current_extranonce2_size, &current_job_id, &current_prevhash, &current_coinb1, &current_coinb2, &current_version, &current_nbit, &current_ntime, &current_merkle_branch]() {
         char rx_buffer[4096];
         while (true) {
             memset(rx_buffer, 0, sizeof(rx_buffer));
@@ -138,16 +138,18 @@ void startMiningLoop() {
             }
 
             if (payload.find("mining.notify") != std::string::npos) {
-                std::regex notify_regex(R"REGEX("params":\s*\[\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*\[(.*?)\]\s*,\s*"([^"]+)",\s*"([^"]+)")REGEX");
+                // 修正正則表達式，完整提取包含 version 在內的所有尾端參數
+                std::regex notify_regex(R"REGEX("params":\s*\[\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*\[(.*?)\]\s*,\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)")REGEX");
                 std::smatch match;
-                if (std::regex_search(payload, match, notify_regex) && match.size() >= 8) {
+                if (std::regex_search(payload, match, notify_regex) && match.size() >= 9) {
                     current_job_id = match.str(1);
                     current_prevhash = match.str(2);
                     current_coinb1 = match.str(3);
                     current_coinb2 = match.str(4);
                     std::string merkle_array_str = match.str(5);
-                    current_nbit = match.str(6);
-                    current_ntime = match.str(7);
+                    current_version = match.str(6);
+                    current_nbit = match.str(7);
+                    current_ntime = match.str(8);
                     
                     current_merkle_branch = extractArrayElements(merkle_array_str);
                     LOGI("【取得新任務】 Job ID: %s, 梅克爾分支數量: %zu", current_job_id.c_str(), current_merkle_branch.size());
@@ -172,10 +174,27 @@ void startMiningLoop() {
         std::string extranonce2 = en2_ss.str();
 
         std::string coinbase_hex = current_coinb1 + current_extranonce1 + extranonce2 + current_coinb2;
+        
+        // 1. 將 Coinbase 十六進位字串轉為二進位陣列
+        size_t coinbase_len = coinbase_hex.length() / 2;
+        uint8_t coinbase_bytes[1024]; 
+        hexStringToBytes(coinbase_hex, coinbase_bytes);
 
-        char header_buf[512];
-        snprintf(header_buf, sizeof(header_buf), "%s-%u-%s", current_prevhash.c_str(), nonce, current_ntime.c_str());
-        double_sha256(reinterpret_cast<const uint8_t*>(header_buf), strlen(header_buf), hash_output);
+        // 2. 對 Coinbase 進行雙重 SHA-256，取得梅克爾樹初始葉節點 (Coinbase Hash)
+        uint8_t merkle_root[32];
+        double_sha256(coinbase_bytes, coinbase_len, merkle_root);
+
+        // 3. 遍歷梅克爾分支陣列，逐一拼接並進行雜湊
+        for (const std::string& branch_hex : current_merkle_branch) {
+            uint8_t branch_bytes[32];
+            hexStringToBytes(branch_hex, branch_bytes);
+            
+            uint8_t concat[64];
+            memcpy(concat, merkle_root, 32);
+            memcpy(concat + 32, branch_bytes, 32);
+            
+            double_sha256(concat, 64, merkle_root);
+        }
 
         nonce++;
         if (nonce == 0xFFFFFFFF) {
@@ -184,7 +203,8 @@ void startMiningLoop() {
         }
 
         if (nonce % 100000 == 0) {
-            LOGI("小菊運算中... Nonce: %u, Coinbase: %s...", nonce, coinbase_hex.substr(0, 32).c_str());
+            std::string merkle_root_hex = bytesToHexString(merkle_root, 32);
+            LOGI("小菊運算中... Nonce: %u, Merkle Root: %s", nonce, merkle_root_hex.c_str());
         }
     }
 
@@ -195,7 +215,7 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_manekiminer_app_MainActivity_stringFromJNI(
         JNIEnv* env,
         jobject /* this */) {
-    std::string status = "引擎就緒。梅克爾與 Coinbase 模組掛載。";
+    std::string status = "引擎就緒。梅克爾根計算模組掛載。";
     return env->NewStringUTF(status.c_str());
 }
 
