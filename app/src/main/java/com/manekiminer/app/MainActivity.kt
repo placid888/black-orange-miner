@@ -10,6 +10,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.widget.TextView
+import androidx.annotation.Keep
+import com.manekiminer.app.R
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -146,6 +148,7 @@ class MainActivity : Activity() {
         unregisterReceiver(powerReceiver)
     }
 
+    @Keep
     fun updateMiningStatus(status: String, nonce: Int, hash: String) {
         runOnUiThread {
             if (nonce == 0 && hash.isEmpty()) {
