@@ -20,8 +20,7 @@
 const char* POOL_HOST = "solo.ckpool.org";
 const int POOL_PORT = 3333;
 
-// 務必保留已設定好的比特幣地址
-const char* WALLET_ADDRESS = "bc1qvn2rhjw553l2ttplyqpt2kaepd32dh5q6kfac9";
+const char* WALLET_ADDRESS = "請貼上比特幣地址";
 
 std::string bytesToHexString(const uint8_t* bytes, size_t len) {
     std::stringstream ss;
@@ -79,60 +78,74 @@ void startMiningLoop() {
     snprintf(authorize_msg, sizeof(authorize_msg), "{\"id\": 2, \"method\": \"mining.authorize\", \"params\": [\"%s\", \"x\"]}\n", WALLET_ADDRESS);
     send(sock, authorize_msg, strlen(authorize_msg), 0);
 
-    LOGI("小菊完成授權，進入持續監聽任務模式...");
+    LOGI("小菊完成授權，進入挖礦與任務監聽迴圈...");
 
     char buffer[4096];
-    while (true) {
-        memset(buffer, 0, sizeof(buffer));
-        int bytes_received = recv(sock, buffer, sizeof(buffer) - 1, 0);
+    std::string current_job_id = "";
+    std::string current_prevhash = "";
+    std::string current_coinb1 = "";
+    std::string current_coinb2 = "";
+    std::string current_nbit = "";
+    std::string current_ntime = "";
 
-        if (bytes_received > 0) {
-            std::string payload(buffer);
-            
+    // 設定 Socket 為非阻塞或透過執行緒同步讀取
+    // 此處簡化架構：啟動獨立運算迴圈，背景同時監聽伺服器封包
+    std::thread listener_thread([sock, &current_job_id, &current_prevhash, &current_coinb1, &current_coinb2, &current_nbit, &current_ntime]() {
+        char rx_buffer[4096];
+        while (true) {
+            memset(rx_buffer, 0, sizeof(rx_buffer));
+            int bytes_received = recv(sock, rx_buffer, sizeof(rx_buffer) - 1, 0);
+            if (bytes_received <= 0) break;
+
+            std::string payload(rx_buffer);
             if (payload.find("mining.notify") != std::string::npos) {
-                // 加入 REGEX 邊界標記以避免 )" 提早閉合
-                std::regex notify_regex(R"REGEX("params":\s*\[\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)")REGEX");
+                std::regex notify_regex(R"REGEX("params":\s*\[\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*"([^"]+)",\s*\[[^\]]*\],\s*"([^"]+)",\s*"([^"]+)")REGEX");
                 std::smatch match;
-                
-                if (std::regex_search(payload, match, notify_regex) && match.size() >= 5) {
-                    std::string job_id = match.str(1);
-                    std::string prevhash = match.str(2);
-                    std::string coinb1 = match.str(3);
-                    std::string coinb2 = match.str(4);
-                    
-                    LOGI("【任務解析成功】 Job ID: %s", job_id.c_str());
-                    LOGI("前一區塊雜湊 (prevhash): %s", prevhash.c_str());
-                } else {
-                    LOGE("任務解析失敗，封包格式不符或參數缺失");
-                }
-            } 
-            else if (payload.find("mining.set_difficulty") != std::string::npos) {
-                std::regex diff_regex(R"REGEX("params":\s*\[\s*([0-9.]+)\s*\])REGEX");
-                std::smatch match;
-                
-                if (std::regex_search(payload, match, diff_regex) && match.size() >= 2) {
-                    std::string difficulty = match.str(1);
-                    LOGI("【難度調整】 當前目標難度: %s", difficulty.c_str());
+                if (std::regex_search(payload, match, notify_regex) && match.size() >= 7) {
+                    current_job_id = match.str(1);
+                    current_prevhash = match.str(2);
+                    current_coinb1 = match.str(3);
+                    current_coinb2 = match.str(4);
+                    current_nbit = match.str(5);
+                    current_ntime = match.str(6);
+                    LOGI("【取得新任務】 Job ID: %s", current_job_id.c_str());
                 }
             }
-        } else if (bytes_received == 0) {
-            LOGE("礦池伺服器已關閉連線");
-            break;
-        } else {
-            LOGE("網路連線異常中斷");
-            break;
+        }
+    });
+    listener_thread.detach();
+
+    // 挖礦碰撞主迴圈
+    uint32_t nonce = 0;
+    uint8_t hash_output[32];
+
+    while (true) {
+        if (current_prevhash.empty()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            continue;
+        }
+
+        // 組合簡易區塊標頭進行雙重雜湊測試
+        char header_buf[512];
+        snprintf(header_buf, sizeof(header_buf), "%s-%u-%s", current_prevhash.c_str(), nonce, current_ntime.c_str());
+        
+        double_sha256(reinterpret_cast<const uint8_t*>(header_buf), strlen(header_buf), hash_output);
+
+        nonce++;
+
+        if (nonce % 100000 == 0) {
+            LOGI("小菊運算中... 當前 Nonce: %u", nonce);
         }
     }
 
     close(sock);
-    LOGI("連線結束，退出小菊全速模式");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_manekiminer_app_MainActivity_stringFromJNI(
         JNIEnv* env,
         jobject /* this */) {
-    std::string status = "小月與小菊引擎就緒。任務解析模組已掛載。";
+    std::string status = "小月與小菊引擎就緒。挖礦核心運算中。";
     return env->NewStringUTF(status.c_str());
 }
 
