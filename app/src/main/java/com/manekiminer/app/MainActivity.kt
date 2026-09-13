@@ -15,6 +15,8 @@ import android.widget.TextClock
 import android.widget.TextView
 
 class MainActivity : Activity() {
+    external fun stringFromJNI(): String
+    external fun startMiningNative() 
 
     private lateinit var statusView: TextView
     private lateinit var powerReceiver: BroadcastReceiver
