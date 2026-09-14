@@ -1,3 +1,4 @@
+// 完整 app/src/main/java/com/manekiminer/app/MainActivity.kt 檔案內容
 package com.manekiminer.app
 
 import android.animation.ObjectAnimator
@@ -22,6 +23,7 @@ import android.view.Gravity
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import com.airbnb.lottie.LottieAnimationView
@@ -51,6 +53,7 @@ class MainActivity : Activity() {
     private lateinit var valStatus: TextView
     private lateinit var valUptime: TextView
     private lateinit var valHashrate: TextView
+    private lateinit var hashrateProgress: ProgressBar
     private lateinit var valJobId: TextView
     private lateinit var valDifficulty: TextView
     private lateinit var valRoundTime: TextView     
@@ -66,6 +69,7 @@ class MainActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private var isMining = false
     private var isScreenKeptOn = true
+    private var lastShares = 0
 
     private enum class MiningMode { FULL_SPEED, LOW_POWER, THERMAL_THROTTLE }
     private var currentMode: MiningMode? = null
@@ -211,9 +215,44 @@ class MainActivity : Activity() {
         }
         bottomCardLayout.addView(tvMode)
 
+        // 儀表板排版與狀態區塊
         valStatus = createDashboardRow(bottomCardLayout, "節點狀態", "#00E676")
         valUptime = createDashboardRow(bottomCardLayout, "運行時間", "#E0E0E0")
-        valHashrate = createDashboardRow(bottomCardLayout, "即時算力", "#00B0FF")
+        
+        // 環形算力轉速表
+        val hashrateContainer = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 300
+            ).apply { setMargins(0, 16, 0, 16) }
+        }
+
+        hashrateProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            layoutParams = FrameLayout.LayoutParams(300, 300, Gravity.CENTER)
+            val resourceId = resources.getIdentifier("circular_progress_bar", "drawable", packageName)
+            if (resourceId != 0) {
+                progressDrawable = getDrawable(resourceId)
+            }
+            max = 2500 // 預設最大值 25 MH/s
+            progress = 0
+        }
+
+        valHashrate = TextView(this).apply {
+            text = "0.00\nMH/s"
+            setTextColor(Color.parseColor("#00B0FF"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, 
+                FrameLayout.LayoutParams.WRAP_CONTENT, 
+                Gravity.CENTER
+            )
+        }
+
+        hashrateContainer.addView(hashrateProgress)
+        hashrateContainer.addView(valHashrate)
+        bottomCardLayout.addView(hashrateContainer)
+
         valJobId = createDashboardRow(bottomCardLayout, "當前任務", "#FF9800")
         valDifficulty = createDashboardRow(bottomCardLayout, "區塊難度", "#00BCD4")
         valRoundTime = createDashboardRow(bottomCardLayout, "本輪耗時", "#FF4081")     
@@ -312,6 +351,41 @@ class MainActivity : Activity() {
         return tvValue
     }
 
+    private fun dropTreat() {
+        val emojis = arrayOf("🍗", "🥩", "🐟", "🍤", "⭐")
+        val treatView = TextView(this).apply {
+            text = emojis.random()
+            textSize = (36..56).random().toFloat()
+            elevation = 20f
+            val screenWidth = resources.displayMetrics.widthPixels
+            x = (screenWidth * 0.1f + Math.random() * (screenWidth * 0.8f)).toFloat()
+            y = -150f
+        }
+
+        val rootView = window.decorView.findViewById<android.view.ViewGroup>(android.R.id.content)
+        rootView.post { rootView.addView(treatView) }
+
+        val screenHeight = resources.displayMetrics.heightPixels.toFloat()
+
+        val fallAnimator = ObjectAnimator.ofFloat(treatView, "translationY", -150f, screenHeight + 100f).apply {
+            duration = (1500..2500).random().toLong()
+            interpolator = android.view.animation.AccelerateInterpolator()
+        }
+
+        val rotateAnimator = ObjectAnimator.ofFloat(treatView, "rotation", 0f, (-360..360).random().toFloat()).apply {
+            duration = fallAnimator.duration
+        }
+
+        fallAnimator.addListener(object : android.animation.AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: android.animation.Animator) {
+                rootView.post { rootView.removeView(treatView) }
+            }
+        })
+
+        fallAnimator.start()
+        rotateAnimator.start()
+    }
+
     private fun showJackpotDialog(winningNonce: Int, winningHash: String) {
         try {
             var resourceId = resources.getIdentifier("jackpot_sound", "raw", packageName)
@@ -391,13 +465,22 @@ class MainActivity : Activity() {
             valRoundTime.text = formatTime(roundTime)
             valPrevRoundTime.text = formatTime(prevRoundTime)
 
-            valHashrate.text = when {
-                hashrate >= 1_000_000 -> String.format(Locale.US, "%.2f MH/s", hashrate / 1_000_000)
-                hashrate >= 1_000 -> String.format(Locale.US, "%.2f kH/s", hashrate / 1_000)
-                else -> String.format(Locale.US, "%.2f H/s", hashrate)
+            val hashrateValue = (hashrate / 1_000_000).toFloat()
+            valHashrate.text = String.format(Locale.US, "%.2f\nMH/s", hashrateValue)
+
+            val progressAnimator = ValueAnimator.ofInt(hashrateProgress.progress, (hashrateValue * 100).toInt()).apply {
+                duration = 200
+                addUpdateListener { animator ->
+                    hashrateProgress.progress = animator.animatedValue as Int
+                }
             }
+            progressAnimator.start()
             
             valShares.text = "$shares Shares"
+            if (shares > lastShares) {
+                lastShares = shares
+                dropTreat()
+            }
             
             if (nonce != 0 || hash.isNotEmpty()) {
                 val shortHash = if (hash.length > 16) "${hash.take(8)}...${hash.takeLast(8)}" else hash
