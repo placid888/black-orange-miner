@@ -1,6 +1,7 @@
 package com.manekiminer.app
 
 import android.animation.ObjectAnimator
+import android.animation.ValueAnimator
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.BroadcastReceiver
@@ -21,6 +22,7 @@ import android.view.Gravity
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import com.airbnb.lottie.LottieAnimationView
 import com.airbnb.lottie.LottieDrawable
@@ -32,6 +34,7 @@ import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.LinkedList
 import kotlin.concurrent.thread
 
 class MainActivity : Activity() {
@@ -54,6 +57,11 @@ class MainActivity : Activity() {
     private lateinit var valShares: TextView
     private lateinit var valHash: TextView
     private lateinit var valNonce: TextView
+    
+    // 新增：終端機資料流介面
+    private lateinit var svTerminal: ScrollView
+    private lateinit var tvTerminal: TextView
+    private val hashLog = LinkedList<String>()
 
     private val handler = Handler(Looper.getMainLooper())
     private var isMining = false
@@ -63,6 +71,10 @@ class MainActivity : Activity() {
     private var currentMode: MiningMode? = null
     private var isPluggedIn = false
     private var batteryTemp = 0.0f
+    
+    // 用於儀表板發光動畫
+    private var borderAnimator: ValueAnimator? = null
+    private lateinit var dashboardDrawable: GradientDrawable
 
     external fun stringFromJNI(): String
     external fun startMiningNative()
@@ -163,19 +175,22 @@ class MainActivity : Activity() {
         }
         animationContainer.addView(catLottieView)
 
+        // 儀表板背景與發光邊框設置
+        dashboardDrawable = GradientDrawable().apply {
+            setColor(Color.parseColor("#121212")) 
+            cornerRadius = 32f 
+            setStroke(3, Color.parseColor("#33FFFFFF")) 
+        }
+
         val bottomCardLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(48, 32, 48, 48)
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#121212")) 
-                cornerRadius = 32f 
-                setStroke(2, Color.parseColor("#33FFFFFF")) 
-            }
+            background = dashboardDrawable
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                setMargins(48, 16, 48, 32) 
+                setMargins(48, 16, 48, 16) 
             }
         }
 
@@ -198,6 +213,26 @@ class MainActivity : Activity() {
         valShares = createDashboardRow(bottomCardLayout, "有效提交", "#FFD600")
         valNonce = createDashboardRow(bottomCardLayout, "隨機雜湊", "#B388FF")
         valHash = createDashboardRow(bottomCardLayout, "當前運算", "#9E9E9E")
+        
+        // 新增：Matrix 駭客資料流終端機
+        svTerminal = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, 200 // 固定高度
+            ).apply { setMargins(48, 0, 48, 32) }
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#080808"))
+                cornerRadius = 16f
+                setStroke(2, Color.parseColor("#1A00FF00"))
+            }
+            setPadding(24, 24, 24, 24)
+        }
+        
+        tvTerminal = TextView(this).apply {
+            setTextColor(Color.parseColor("#00E676")) // 螢光綠
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
+            typeface = Typeface.MONOSPACE
+        }
+        svTerminal.addView(tvTerminal)
 
         val btnExit = Button(this).apply {
             text = "停止挖礦並退出系統"
@@ -219,6 +254,7 @@ class MainActivity : Activity() {
         rootLayout.addView(topLayout)
         rootLayout.addView(animationContainer)
         rootLayout.addView(bottomCardLayout)
+        rootLayout.addView(svTerminal) // 加入駭客資料流視窗
         rootLayout.addView(btnExit)
 
         setContentView(rootLayout)
@@ -274,12 +310,9 @@ class MainActivity : Activity() {
             if (resourceId == 0) {
                 resourceId = resources.getIdentifier("background_sound", "raw", packageName)
             }
-            
             if (resourceId != 0) {
                 val mp = MediaPlayer.create(this, resourceId)
-                mp.setOnCompletionListener { 
-                    it.release() 
-                }
+                mp.setOnCompletionListener { it.release() }
                 mp.start()
             }
         } catch (e: Exception) {
@@ -290,12 +323,10 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             setPadding(64, 80, 64, 80)
-            
             background = GradientDrawable().apply {
                 colors = intArrayOf(Color.parseColor("#FFD700"), Color.parseColor("#FFA000"))
                 cornerRadius = 48f
             }
-
             addView(TextView(context).apply {
                 text = "🎉 JACKPOT! 貓咪發威啦! 🎉\n成功找到有效區塊！"
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f)
@@ -304,7 +335,6 @@ class MainActivity : Activity() {
                 gravity = Gravity.CENTER
                 setPadding(0, 0, 0, 32)
             })
-
             addView(TextView(context).apply {
                 text = String.format("神聖 Nonce: 0x%08X", winningNonce)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
@@ -312,7 +342,6 @@ class MainActivity : Activity() {
                 typeface = Typeface.MONOSPACE
                 gravity = Gravity.CENTER
             })
-
             addView(TextView(context).apply {
                 text = "Winning Hash:\n$winningHash"
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
@@ -326,9 +355,7 @@ class MainActivity : Activity() {
         AlertDialog.Builder(this)
             .setView(dialogView)
             .setCancelable(false) 
-            .setPositiveButton("太神啦！繼續挖") { dialog, _ -> 
-                dialog.dismiss() 
-            }
+            .setPositiveButton("太神啦！繼續挖") { dialog, _ -> dialog.dismiss() }
             .show()
     }
 
@@ -336,9 +363,7 @@ class MainActivity : Activity() {
         runOnUiThread {
             valStatus.text = status
             
-            if (status.contains("🎯")) {
-                showJackpotDialog(nonce, hash)
-            }
+            if (status.contains("🎯")) showJackpotDialog(nonce, hash)
             
             if (uptime > 0) {
                 val hours = uptime / 3600
@@ -367,8 +392,16 @@ class MainActivity : Activity() {
             valShares.text = "$shares Shares"
             
             if (nonce != 0 || hash.isNotEmpty()) {
+                val shortHash = if (hash.length > 16) "${hash.take(8)}...${hash.takeLast(8)}" else hash
                 valNonce.text = String.format("0x%08X", nonce) 
-                valHash.text = if (hash.length > 16) "${hash.take(8)}...${hash.takeLast(8)}" else hash
+                valHash.text = shortHash
+                
+                // 動態更新駭客資料流終端機
+                val logLine = String.format("0x%08X > %s", nonce, hash.take(24) + "...")
+                hashLog.add(logLine)
+                if (hashLog.size > 8) hashLog.removeFirst() // 保持畫面只顯示 8 行，確保滾動流暢
+                tvTerminal.text = hashLog.joinToString("\n")
+                svTerminal.post { svTerminal.fullScroll(ScrollView.FOCUS_DOWN) }
             }
         }
     }
@@ -410,29 +443,52 @@ class MainActivity : Activity() {
                 tvMode.setTextColor(Color.parseColor("#FF5252"))
                 switchCatMode(false)
                 setMiningIntensity(false)
+                stopBorderAnimation()
             }
             MiningMode.FULL_SPEED -> {
                 tvMode.text = "【小菊模式】電源連接全速運算"
                 tvMode.setTextColor(Color.parseColor("#FFA500"))
                 switchCatMode(true)
                 setMiningIntensity(true)
+                startBorderAnimation() // 啟動高頻呼吸燈
             }
             MiningMode.LOW_POWER -> {
                 tvMode.text = "【小月模式】電池供電節能運算"
                 tvMode.setTextColor(Color.parseColor("#FFA500"))
                 switchCatMode(false)
                 setMiningIntensity(false)
+                stopBorderAnimation()
             }
         }
+    }
+
+    private fun startBorderAnimation() {
+        if (borderAnimator != null && borderAnimator!!.isRunning) return
+        
+        // 外框從暗灰閃爍至亮橘色，營造引擎全開的極速感
+        borderAnimator = ValueAnimator.ofArgb(Color.parseColor("#33FFFFFF"), Color.parseColor("#FF9800")).apply {
+            duration = 300 // 閃爍頻率極快
+            repeatMode = ValueAnimator.REVERSE
+            repeatCount = ValueAnimator.INFINITE
+            addUpdateListener { animator ->
+                dashboardDrawable.setStroke(4, animator.animatedValue as Int)
+            }
+            start()
+        }
+    }
+
+    private fun stopBorderAnimation() {
+        borderAnimator?.cancel()
+        dashboardDrawable.setStroke(3, Color.parseColor("#33FFFFFF")) // 恢復平靜狀態
     }
 
     private fun switchCatMode(isPluggedIn: Boolean) {
         catLottieView.cancelAnimation()
         if (isPluggedIn) {
             catLottieView.setAnimation("orange_cat.json")
-            catLottieView.scaleX = 1.2f 
-            catLottieView.scaleY = 1.2f
-            catLottieView.speed = 1.5f  
+            catLottieView.scaleX = 1.3f 
+            catLottieView.scaleY = 1.3f
+            catLottieView.speed = 2.5f  // 小菊瘋狂進食模式
         } else {
             catLottieView.setAnimation("black_cat.json")
             catLottieView.scaleX = 0.85f 
@@ -529,5 +585,6 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         super.onDestroy()
         unregisterReceiver(systemReceiver)
+        borderAnimator?.cancel()
     }
 }

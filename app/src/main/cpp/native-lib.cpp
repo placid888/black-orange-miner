@@ -153,7 +153,6 @@ void minerWorker(int thread_id, int num_threads) {
     } else {
         CPU_SET(thread_id % num_threads, &cpuset);
     }
-    
     sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
 
     uint8_t local_header[80];
@@ -183,7 +182,6 @@ void minerWorker(int thread_id, int num_threads) {
         uint64_t local_hashes = 0;
 
         while (g_is_mining_running && g_job_version.load() == current_version) {
-            
             if (!g_is_full_speed) {
                 if (local_hashes % 500 == 0) std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
@@ -381,7 +379,10 @@ void networkLoop() {
         listener_thread.detach();
 
         while (is_connected && g_is_mining_running) {
-            std::this_thread::sleep_for(std::chrono::seconds(1));
+            // ==========================================
+            // 🚀 解除 FPS 封印：從每秒 1 次提升至每秒 5 次 (200毫秒)
+            // ==========================================
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
             
             auto now = std::chrono::steady_clock::now();
             double elapsed = std::chrono::duration<double>(now - last_ui_update).count();
