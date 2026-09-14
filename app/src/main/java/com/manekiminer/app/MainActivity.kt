@@ -42,6 +42,7 @@ class MainActivity : Activity() {
     private lateinit var tvTime: TextView
     private lateinit var tvDate: TextView
     private lateinit var tvWeather: TextView
+    private lateinit var tvBtcPrice: TextView
     private lateinit var tvBatteryTemp: TextView
     private lateinit var tvScreenToggle: TextView
     private lateinit var tvMode: TextView
@@ -58,7 +59,6 @@ class MainActivity : Activity() {
     private lateinit var valHash: TextView
     private lateinit var valNonce: TextView
     
-    // 新增：終端機資料流介面
     private lateinit var svTerminal: ScrollView
     private lateinit var tvTerminal: TextView
     private val hashLog = LinkedList<String>()
@@ -72,7 +72,6 @@ class MainActivity : Activity() {
     private var isPluggedIn = false
     private var batteryTemp = 0.0f
     
-    // 用於儀表板發光動畫
     private var borderAnimator: ValueAnimator? = null
     private lateinit var dashboardDrawable: GradientDrawable
 
@@ -122,6 +121,15 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
         }
 
+        tvBtcPrice = TextView(this).apply {
+            setTextColor(Color.parseColor("#F7931A"))
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            typeface = Typeface.MONOSPACE
+            gravity = Gravity.CENTER
+            setPadding(0, 6, 0, 2)
+            text = "₿ BTC: 連線更新中..."
+        }
+
         tvBatteryTemp = TextView(this).apply {
             setTextColor(Color.parseColor("#4CAF50"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
@@ -154,6 +162,7 @@ class MainActivity : Activity() {
         topLayout.addView(tvTime)
         topLayout.addView(tvDate)
         topLayout.addView(tvWeather)
+        topLayout.addView(tvBtcPrice)
         topLayout.addView(tvBatteryTemp)
         topLayout.addView(tvScreenToggle)
 
@@ -175,7 +184,6 @@ class MainActivity : Activity() {
         }
         animationContainer.addView(catLottieView)
 
-        // 儀表板背景與發光邊框設置
         dashboardDrawable = GradientDrawable().apply {
             setColor(Color.parseColor("#121212")) 
             cornerRadius = 32f 
@@ -214,10 +222,9 @@ class MainActivity : Activity() {
         valNonce = createDashboardRow(bottomCardLayout, "隨機雜湊", "#B388FF")
         valHash = createDashboardRow(bottomCardLayout, "當前運算", "#9E9E9E")
         
-        // 新增：Matrix 駭客資料流終端機
         svTerminal = ScrollView(this).apply {
             layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 200 // 固定高度
+                LinearLayout.LayoutParams.MATCH_PARENT, 200
             ).apply { setMargins(48, 0, 48, 32) }
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#080808"))
@@ -228,7 +235,7 @@ class MainActivity : Activity() {
         }
         
         tvTerminal = TextView(this).apply {
-            setTextColor(Color.parseColor("#00E676")) // 螢光綠
+            setTextColor(Color.parseColor("#00E676"))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f)
             typeface = Typeface.MONOSPACE
         }
@@ -254,7 +261,7 @@ class MainActivity : Activity() {
         rootLayout.addView(topLayout)
         rootLayout.addView(animationContainer)
         rootLayout.addView(bottomCardLayout)
-        rootLayout.addView(svTerminal) // 加入駭客資料流視窗
+        rootLayout.addView(svTerminal)
         rootLayout.addView(btnExit)
 
         setContentView(rootLayout)
@@ -269,6 +276,7 @@ class MainActivity : Activity() {
 
         startClock()
         fetchWeather()
+        startBtcPricePolling()
         registerBatteryReceiver()
     }
 
@@ -396,10 +404,9 @@ class MainActivity : Activity() {
                 valNonce.text = String.format("0x%08X", nonce) 
                 valHash.text = shortHash
                 
-                // 動態更新駭客資料流終端機
                 val logLine = String.format("0x%08X > %s", nonce, hash.take(24) + "...")
                 hashLog.add(logLine)
-                if (hashLog.size > 8) hashLog.removeFirst() // 保持畫面只顯示 8 行，確保滾動流暢
+                if (hashLog.size > 8) hashLog.removeFirst()
                 tvTerminal.text = hashLog.joinToString("\n")
                 svTerminal.post { svTerminal.fullScroll(ScrollView.FOCUS_DOWN) }
             }
@@ -450,7 +457,7 @@ class MainActivity : Activity() {
                 tvMode.setTextColor(Color.parseColor("#FFA500"))
                 switchCatMode(true)
                 setMiningIntensity(true)
-                startBorderAnimation() // 啟動高頻呼吸燈
+                startBorderAnimation()
             }
             MiningMode.LOW_POWER -> {
                 tvMode.text = "【小月模式】電池供電節能運算"
@@ -465,9 +472,8 @@ class MainActivity : Activity() {
     private fun startBorderAnimation() {
         if (borderAnimator != null && borderAnimator!!.isRunning) return
         
-        // 外框從暗灰閃爍至亮橘色，營造引擎全開的極速感
         borderAnimator = ValueAnimator.ofArgb(Color.parseColor("#33FFFFFF"), Color.parseColor("#FF9800")).apply {
-            duration = 300 // 閃爍頻率極快
+            duration = 300
             repeatMode = ValueAnimator.REVERSE
             repeatCount = ValueAnimator.INFINITE
             addUpdateListener { animator ->
@@ -479,7 +485,7 @@ class MainActivity : Activity() {
 
     private fun stopBorderAnimation() {
         borderAnimator?.cancel()
-        dashboardDrawable.setStroke(3, Color.parseColor("#33FFFFFF")) // 恢復平靜狀態
+        dashboardDrawable.setStroke(3, Color.parseColor("#33FFFFFF"))
     }
 
     private fun switchCatMode(isPluggedIn: Boolean) {
@@ -488,7 +494,7 @@ class MainActivity : Activity() {
             catLottieView.setAnimation("orange_cat.json")
             catLottieView.scaleX = 1.3f 
             catLottieView.scaleY = 1.3f
-            catLottieView.speed = 2.5f  // 小菊瘋狂進食模式
+            catLottieView.speed = 2.5f
         } else {
             catLottieView.setAnimation("black_cat.json")
             catLottieView.scaleX = 0.85f 
@@ -535,6 +541,44 @@ class MainActivity : Activity() {
             } catch (e: Exception) {
                 e.printStackTrace()
                 runOnUiThread { tvWeather.text = "氣象資訊獲取失敗" }
+            }
+        }
+    }
+
+    private fun startBtcPricePolling() {
+        handler.post(object : Runnable {
+            override fun run() {
+                fetchBtcPrice()
+                handler.postDelayed(this, 60000)
+            }
+        })
+    }
+
+    private fun fetchBtcPrice() {
+        thread {
+            try {
+                val url = URL("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=twd")
+                val connection = url.openConnection() as HttpURLConnection
+                connection.requestMethod = "GET"
+                connection.connectTimeout = 5000
+                connection.readTimeout = 5000
+                connection.setRequestProperty("User-Agent", "Mozilla/5.0")
+                val reader = BufferedReader(InputStreamReader(connection.inputStream))
+                val response = reader.readText()
+                reader.close()
+                
+                val jsonObject = JSONObject(response)
+                val btcTwd = jsonObject.getJSONObject("bitcoin").getDouble("twd")
+                val blockRewardTwd = btcTwd * 3.125
+
+                runOnUiThread {
+                    tvBtcPrice.text = String.format(Locale.TAIWAN, "₿ NT$%,.0f | 爆塊: NT$%,.0f", btcTwd, blockRewardTwd)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                runOnUiThread {
+                    tvBtcPrice.text = "₿ BTC 行情更新失敗"
+                }
             }
         }
     }
