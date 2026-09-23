@@ -26,7 +26,7 @@
 
 const char* POOL_HOST = "solo.ckpool.org";
 const int POOL_PORT = 3333;
-const char* WALLET_ADDRESS = "bc1qvn2rhjw553l2ttplyqpt2kaepd32dh5q6kfac9";
+const char* WALLET_ADDRESS = "bc1qldm4e3yzaq5acf5sgg6m0486a2hvgkx370w6sx";
 
 JavaVM* g_jvm = nullptr;
 jobject g_main_activity = nullptr;
